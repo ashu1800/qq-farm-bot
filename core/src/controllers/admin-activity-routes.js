@@ -6,7 +6,6 @@ const {
 } = require("./admin-nangua-activity-routes");
 const { registerAdminActivityUpdateRoutes } = require('./admin-activity-update-routes');
 const { registerAdminWishShareActivityRoutes } = require('./admin-wish-share-activity-routes');
-const { registerAdminMilkTeaActivityRoutes } = require('./admin-milk-tea-activity-routes');
 
 function registerAdminActivityRoutes({
   app,
@@ -28,7 +27,6 @@ function registerAdminActivityRoutes({
   registerAdminHeluActivityRoutes(routeContext);
   registerAdminActivityUpdateRoutes({ app, provider, requireAdminToken });
   registerAdminWishShareActivityRoutes(routeContext);
-  registerAdminMilkTeaActivityRoutes(routeContext);
 }
 
 module.exports = { registerAdminActivityRoutes };

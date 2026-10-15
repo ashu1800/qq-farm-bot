@@ -1,5 +1,10 @@
 # 奶茶热销中（2026110100）活动协议取证
 
+> **v2.8.0 起本文档不再是实现依据**：奶茶活动已改为官方 v2.8.0 实现
+> （`core/src/services/activity-milk-tea.js` + `core/src/proto/milk-tea.proto`
+> + `core/src/activity-data/milk-tea-*.json`），本地早期版本（`activity.js` 内联实现与
+> `admin-milk-tea-activity-routes.js`）已在合并上游 v2.8.0 时移除。本文档仅作历史取证留存。
+>
 > 取证时间：2026-10-15。取证方式：在线账号 `ActivityService.List` + `GetGroup(2026110100, "MilkTeaActivity")` 明文响应。
 > 证据等级：结构表为 **在线明文（高）**；操作命令为 **同构复用推断（中）**，首次真实兑换/领取后应回填响应样本。
 

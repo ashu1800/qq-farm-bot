@@ -32,15 +32,9 @@ export const SHARE_REWARD_ACTIVITY_WINDOW = {
   updatedMs: 1790179200 * 1000,
 }
 
-// 奶茶热销中。时间取自官方 List 在线登记（UTC+8 秒级时间戳），2026-10-15 发现。
-// 玩法体结构未取证：详情面板暂为只读；接入自动化开关时需与
-// core/src/models/store.js 的 TIMED_ACTIVITY_AUTOMATION_GROUPS 双写同步。
-export const MILK_TEA_ACTIVITY_WINDOW = {
-  startMs: 1792029600 * 1000,
-  endMs: 1794844799 * 1000,
-  updatedMs: 1792032900 * 1000,
-}
-
 export function isWithinActivityWindowMs(window: { startMs: number, endMs: number }, nowMs = Date.now()) {
   return nowMs >= window.startMs && nowMs <= window.endMs
 }
+
+export const MILK_TEA_ACTIVITY_WINDOW = { startMs: 1792029600000, endMs: 1794844799000, updatedMs: 1792029600000 }
+export const MILK_TEA_BUSINESS_WINDOW = { ...MILK_TEA_ACTIVITY_WINDOW, endMs: 1794671998000 }
