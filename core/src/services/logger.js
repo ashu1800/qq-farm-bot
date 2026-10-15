@@ -60,6 +60,41 @@ function startLogCleanup(logDir) {
   logCleanupTimer.unref?.();
 }
 
+/**
+ * 修正「陈旧 audit 文件劫持日志目录」
+ *
+ * winston-daily-rotate-file 底层的 file-stream-rotator 在 audit 文件已存在时，
+ * 会直接沿用文件里记录的 auditLog 绝对路径（只有文件缺失时才会用传入的路径）。
+ * 因此把 core/data 从旧路径整体拷贝过来后（换机器、换工作副本、把桌面副本搬到别处），
+ * 日志会继续写到旧路径的 audit 文件里 —— 表现为「服务跑在别处，旧目录仍在生成隐藏的
+ * .combined-log-audit.json / .error-log-audit.json」。
+ *
+ * 这里在建 transport 前校验：记录路径不在当前日志目录、或文件内容不可解析时删除该文件，
+ * 交给 winston 重新生成。
+ *
+ * @param {string} auditFilePath - 当前配置的 audit 文件路径
+ * @param {string} logDir - 当前日志目录
+ * @returns {boolean} 是否删除了过期文件
+ */
+function sanitizeAuditFile(auditFilePath, logDir) {
+  try {
+    if (!fs.existsSync(auditFilePath)) return false;
+    let recorded = '';
+    try {
+      recorded = String(JSON.parse(fs.readFileSync(auditFilePath, 'utf8')).auditLog || '');
+    } catch {
+      recorded = '';
+    }
+    const recordedDir = recorded ? path.resolve(path.dirname(recorded)) : '';
+    if (recordedDir === path.resolve(logDir)) return false;
+    fs.unlinkSync(auditFilePath);
+    console.warn(`[日志] 已重置指向其他目录的过期 audit 文件: ${auditFilePath}（记录路径: ${recorded || '无法解析'}）`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // 敏感字段正则：包含 code/token/password 等关键字的键名
 const SENSITIVE_KEY_RE = /code|token|password|passwd|auth|ticket|cookie|session/i;
 
@@ -171,6 +206,12 @@ function getRootLogger() {
   }
   startLogCleanup(logDir);
 
+  // audit 文件若来自其它路径的整体拷贝，会劫持日志目录，先修正再建 transport。
+  const combinedAuditFile = path.join(logDir, '.combined-log-audit.json');
+  const errorAuditFile = path.join(logDir, '.error-log-audit.json');
+  sanitizeAuditFile(combinedAuditFile, logDir);
+  sanitizeAuditFile(errorAuditFile, logDir);
+
   const level = String(process.env.LOG_LEVEL || 'info').toLowerCase();
   const { combine, timestamp, errors, json, colorize, printf } = winston.format;
 
@@ -204,7 +245,7 @@ function getRootLogger() {
         filename: path.join(logDir, 'combined-%DATE%.log'),
         datePattern: 'YYYY-MM-DD-HH',
         maxFiles: '3d',
-        auditFile: path.join(logDir, '.combined-log-audit.json'),
+        auditFile: combinedAuditFile,
         format: combine(timestamp(), errors({ stack: true }), json())
       }),
       // 错误日志文件
@@ -212,7 +253,7 @@ function getRootLogger() {
         filename: path.join(logDir, 'error-%DATE%.log'),
         datePattern: 'YYYY-MM-DD-HH',
         maxFiles: '3d',
-        auditFile: path.join(logDir, '.error-log-audit.json'),
+        auditFile: errorAuditFile,
         level: 'error',
         format: combine(timestamp(), errors({ stack: true }), json())
       })
@@ -256,5 +297,6 @@ module.exports = {
   redactString,
   buildHourlyLogFilename,
   cleanupExpiredLogFiles,
+  sanitizeAuditFile,
   LOG_RETENTION_MS
 };
