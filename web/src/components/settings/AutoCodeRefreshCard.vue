@@ -29,7 +29,7 @@ const config = defineModel<AutoCodeRefreshConfig>('config', { required: true })
     <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div>
         <h3 class="text-lg text-gray-900 font-bold dark:text-gray-100">
-          微信定时刷新重登
+          定时刷新重登
           <span v-if="currentAccountName" class="ml-2 text-sm text-gray-500 font-normal dark:text-gray-400">
             ({{ currentAccountName }})
           </span>
@@ -62,7 +62,7 @@ const config = defineModel<AutoCodeRefreshConfig>('config', { required: true })
         <div class="min-w-0 space-y-2">
           <BaseSwitch v-model="config.enabled" label="启用定时刷新与自动重登" />
           <p class="max-w-3xl text-xs text-gray-500 dark:text-gray-400">
-            <span class="text-amber-700 font-semibold dark:text-amber-300">仅带内置登录凭据的微信扫码账号可用。</span>
+            <span class="text-amber-700 font-semibold dark:text-amber-300">微信账号需带内置登录凭据；QQ 扫码账号依赖 NapCat 中保留的 QQ 会话。</span>
             启用后会按间隔获取新 Code 并重启账号；账号被踢或重连失败时，也会按此间隔尝试自动重登。
             关闭不会停用启动时刷新、Code 失效时的即时恢复和微信凭证保活。
           </p>

@@ -279,6 +279,9 @@ const DEFAULT_AUTOMATION = {
     share_reward_share: false,
     share_reward_daily: false,
     share_reward_milestones: false,
+    // 奶茶热销中：兑换商店需用户挑选商品，不提供自动兑换开关。
+    milk_tea_daily: false,
+    milk_tea_milestones: false,
     // 萌宠成长日记（S3）。刻意不提供的开关：
     // 拾物小铺兑换（exchange，需用户指定商品）、锦囊付费刷新（花点券）、
     // markStories（纯 UI 状态无奖励）、skipBattle（是设置项不是任务）。
@@ -348,6 +351,7 @@ const PET_DIARY_AUTOMATION_KEYS = [
 ];
 const WISH_SIGN_AUTOMATION_KEYS = ['wish_sign_draw', 'wish_sign_claim'];
 const SHARE_REWARD_AUTOMATION_KEYS = ['share_reward_share', 'share_reward_daily', 'share_reward_milestones'];
+const MILK_TEA_AUTOMATION_KEYS = ['milk_tea_daily', 'milk_tea_milestones'];
 
 // 注意：这里的时间窗与 web/src/constants/activity-windows.ts 是手工同步的两份字面量
 // （core 是 CommonJS、web 是 TS，无法共享模块）。改一处必须改另一处，
@@ -355,6 +359,12 @@ const SHARE_REWARD_AUTOMATION_KEYS = ['share_reward_share', 'share_reward_daily'
 const TIMED_ACTIVITY_AUTOMATION_GROUPS = [
     { startTime: 1790179200, endTime: 1791388799, keys: WISH_SIGN_AUTOMATION_KEYS },
     { startTime: 1790179200, endTime: 1791820799, keys: SHARE_REWARD_AUTOMATION_KEYS },
+    {
+        // 对应 web/src/constants/activity-windows.ts 的 MILK_TEA_ACTIVITY_WINDOW
+        startTime: 1792029600,
+        endTime: 1794844799,
+        keys: MILK_TEA_AUTOMATION_KEYS
+    },
     {
         startTime: 1788192000,
         endTime: 1788969599,

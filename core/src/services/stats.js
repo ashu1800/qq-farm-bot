@@ -1,6 +1,12 @@
 const process = require('node:process');
 const path = require('node:path');
 const { readJsonFile, writeJsonFileAtomic } = require('./json-db');
+const {
+  initExpRate,
+  recordExpSample,
+  getExpRate,
+  getExpSamples,
+} = require('./exp-rate');
 
 // ─── 持久化路径 ───
 
@@ -149,6 +155,8 @@ function doSave() {
     operations: ops,
     tongQiGiftCount,
     initialState: init,
+    // 经验样本用于跨 worker 重启保持效率统计，与「今日」无关（按时间窗口自行裁剪）。
+    expSamples: getExpSamples(),
     savedAt: Date.now()
   };
   savePersistedStats(currentAccountId, data);
@@ -214,6 +222,13 @@ function initStatsWithPersistence(accountId, gold, exp, coupon = 0) {
   } else {
     console.warn('[统计] 新账号初始化，无历史数据');
   }
+
+  // 经验样本不受「今日」限制：按时间窗口自行裁剪，跨天与重启后效率统计都能延续。
+  const restoredSamples = initExpRate(accountId, (persisted && persisted.expSamples) || []);
+  if (restoredSamples > 0) {
+    console.warn(`[统计] 已恢复 ${restoredSamples} 条经验样本用于效率统计`);
+  }
+
   initStats(gold, exp, coupon);
 }
 
@@ -287,8 +302,10 @@ function recomputeSessionTotals(gold, exp, coupon) {
  * @param {object} userState - 用户状态（含 gold/exp/coupon）
  * @param {boolean} connected - 是否连接中
  * @param {object} limits - 操作次数限制
+ * @param {object} [options] - 附加上下文
+ * @param {object} [options.levelProgress] - getLevelExpProgress 的结果，用于升级预估
  */
-function getStats(farmUser, userState, connected, limits) {
+function getStats(farmUser, userState, connected, limits, options = {}) {
   checkAndResetDailyStats();
   const fu = farmUser && typeof farmUser === 'object' ? farmUser : {};
   const us = userState && typeof userState === 'object' ? userState : {};
@@ -310,6 +327,21 @@ function getStats(farmUser, userState, connected, limits) {
     updateStats(g, e);
     recomputeSessionTotals(g, e, c);
   }
+
+  // 经验采样：无论在线与否都记录，离线样本用于把离线区间从效率统计中剔除。
+  const level = fu.level || us.level || 0;
+  recordExpSample({ exp: e, level, online: !!connected });
+
+  // 在线活跃效率与升级预估：离线时返回 null，样本不足或满级时不输出 ETA。
+  const levelProgress = options && options.levelProgress ? options.levelProgress : null;
+  const remainingExp = levelProgress && !levelProgress.maxed
+    ? Math.max(0, Number(levelProgress.needed || 0) - Number(levelProgress.current || 0))
+    : 0;
+  const expRate = getExpRate({
+    online: !!connected,
+    remainingExp,
+    levelMaxed: !!(levelProgress && levelProgress.maxed),
+  });
 
   const ops = { ...operations, tongQiGift: tongQiGiftCount };
 
@@ -337,6 +369,7 @@ function getStats(farmUser, userState, connected, limits) {
     sessionCouponGained: session.couponGained,
     lastExpGain: session.lastExpGain,
     lastGoldGain: session.lastGoldGain,
+    expRate,
     limits
   };
 }

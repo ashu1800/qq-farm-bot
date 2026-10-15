@@ -147,34 +147,64 @@ const displayName = computed(() => {
   return '未命名'
 })
 
+// 实时效率与升级预估均改为消费后端下发的 expRate，前端不再用 sessionExpGained / uptime 自行推算。
+const expRateInfo = computed(() => status.value?.expRate || null)
+
 const expRate = computed(() => {
-  const gain = status.value?.sessionExpGained || 0
-  const uptime = status.value?.uptime || 0
-  if (!uptime)
+  const info = expRateInfo.value
+  // 样本还在积累时不能显示 0/小时，否则会被误读成“在线但没有收益”。
+  if (!info || info.ready === false)
+    return '--'
+  const rate = Number(info.expPerHour)
+  if (!Number.isFinite(rate) || rate <= 0)
     return '0/小时'
-  const rate = gain / (uptime / 3600)
-  return `${Math.floor(rate)}/小时`
+  return `${Math.round(rate).toLocaleString('zh-CN')}/小时`
+})
+
+const expRateHint = computed(() => {
+  const info = expRateInfo.value
+  if (!info)
+    return ''
+
+  const windowSeconds = Number(info.windowSeconds) > 0 ? Number(info.windowSeconds) : 3600
+  const windowText = windowSeconds < 3600
+    ? `近 ${Math.max(1, Math.round(windowSeconds / 60))} 分钟在线观测`
+    : `近 ${Math.max(1, Math.round(windowSeconds / 3600))} 小时在线观测`
+  const parts = [windowText]
+
+  if (Number.isFinite(Number(info.sampleCount)))
+    parts.push(`${Number(info.sampleCount)} 个样本`)
+
+  if (info.source === 'extended') {
+    const extendedSeconds = windowSeconds > 3600 ? windowSeconds : 21600
+    parts.push(`样本不足，统计窗口放宽到 ${Math.max(1, Math.round(extendedSeconds / 3600))} 小时`)
+  }
+
+  return parts.join(' · ')
 })
 
 const timeToLevel = computed(() => {
-  const gain = status.value?.sessionExpGained || 0
-  const uptime = status.value?.uptime || 0
-  const current = status.value?.levelProgress?.current || 0
-  const needed = status.value?.levelProgress?.needed || 0
+  const info = expRateInfo.value
+  if (!info || info.ready === false)
+    return '数据积累中'
+  if (status.value?.levelProgress?.maxed === true)
+    return '已满级'
 
-  if (!needed || !uptime || gain <= 0)
+  const etaSeconds = info.etaSeconds
+  if (etaSeconds === null || etaSeconds === undefined)
+    return ''
+  if (info.etaBeyond === true)
+    return '超过 30 天'
+
+  const seconds = Number(etaSeconds)
+  if (!Number.isFinite(seconds) || seconds <= 0)
     return ''
 
-  const ratePerHour = gain / (uptime / 3600)
-  if (ratePerHour <= 0)
-    return ''
-
-  const expNeeded = Math.max(0, needed - current)
-  const minsToLevel = expNeeded / (ratePerHour / 60)
-
-  if (minsToLevel < 60)
-    return `约 ${Math.ceil(minsToLevel)} 分钟后升级`
-  return `约 ${(minsToLevel / 60).toFixed(1)} 小时后升级`
+  if (seconds < 3600)
+    return `约 ${Math.max(1, Math.ceil(seconds / 60))} 分钟后升级`
+  if (seconds < 86400)
+    return `约 ${(seconds / 3600).toFixed(1)} 小时后升级`
+  return `约 ${(seconds / 86400).toFixed(1)} 天后升级`
 })
 
 const fertilizerNormal = computed(() => dashboardItems.value.find((item: any) => Number(item.id) === 1011))
@@ -426,9 +456,14 @@ function getOpColor(key: string | number) {
 }
 
 function getExpPercent(progress: any) {
-  if (!progress || !progress.needed)
+  if (!progress)
     return 0
-  return Math.min(100, Math.max(0, (progress.current / progress.needed) * 100))
+  if (progress.maxed === true)
+    return 100
+  const needed = Number(progress.needed) || 0
+  if (needed <= 0)
+    return 0
+  return Math.min(100, Math.max(0, (Number(progress.current) || 0) / needed * 100))
 }
 
 async function refreshBag(force = false) {
@@ -622,7 +657,8 @@ useIntervalFn(updateCountdowns, 1000)
               <div class="i-fas-bolt text-blue-400" />
               <span>EXP</span>
             </div>
-            <span>{{ status?.levelProgress?.current || 0 }} / {{ status?.levelProgress?.needed || '?' }}</span>
+            <span v-if="status?.levelProgress?.maxed === true">已满级</span>
+            <span v-else>{{ status?.levelProgress?.current || 0 }} / {{ status?.levelProgress?.needed || '?' }}</span>
           </div>
           <div class="h-2 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
             <div
@@ -631,14 +667,26 @@ useIntervalFn(updateCountdowns, 1000)
             />
           </div>
           <div class="mt-2 flex justify-between text-xs text-gray-400">
-            <span>效率: {{ expRate }}</span>
+            <span :title="expRateHint">效率: {{ expRate }}</span>
             <span>{{ timeToLevel }}</span>
+          </div>
+        </div>
+        <div class="mt-3 border-t border-gray-100/80 pt-3 dark:border-gray-700/80">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <div class="h-2.5 w-2.5 rounded-full" :class="status?.connection?.connected ? 'bg-green-500' : currentStatusReady ? 'bg-red-500' : 'bg-gray-300'" />
+              <span class="text-xs font-bold">{{ status?.connection?.connected ? '在线' : currentStatusReady ? '离线' : '检查中' }}</span>
+            </div>
+            <div class="flex items-center gap-1.5 text-xs text-gray-400">
+              <div class="i-fas-clock text-purple-400" />
+              {{ formatDuration(localUptime) }}
+            </div>
           </div>
         </div>
       </div>
 
       <div class="ui-card metric-card min-h-[168px] flex flex-col justify-between rounded-lg p-5">
-        <div class="grid grid-cols-4 gap-3">
+        <div class="grid grid-cols-2 gap-2">
           <div class="min-w-0">
             <div class="flex items-center gap-1.5 text-xs text-gray-500">
               <img src="/game-config/resource-icons/gold.png" alt="金币" class="h-5 w-5 shrink-0 object-contain">
@@ -655,8 +703,8 @@ useIntervalFn(updateCountdowns, 1000)
               {{ (status?.sessionGoldGained || 0) > 0 ? '+' : '' }}{{ formatGoldAmount(status?.sessionGoldGained || 0) }}
             </div>
           </div>
-          <div class="min-w-0 text-center">
-            <div class="flex items-center justify-center gap-1.5 text-xs text-gray-500">
+          <div class="min-w-0">
+            <div class="flex items-center gap-1.5 text-xs text-gray-500">
               <img src="/game-config/resource-icons/coupon.png" alt="点券" class="h-5 w-5 shrink-0 object-contain">
               点券
             </div>
@@ -671,8 +719,11 @@ useIntervalFn(updateCountdowns, 1000)
               {{ (status?.sessionCouponGained || 0) > 0 ? '+' : '' }}{{ formatCouponAmount(status?.sessionCouponGained || 0) }}
             </div>
           </div>
-          <div class="min-w-0 text-center">
-            <div class="flex items-center justify-center gap-1.5 text-xs text-gray-500">
+        </div>
+        <div class="my-3 border-t border-gray-100/80 dark:border-gray-700/80" />
+        <div class="grid grid-cols-2 gap-2">
+          <div class="min-w-0">
+            <div class="flex items-center gap-1.5 text-xs text-gray-500">
               <img src="/game-config/resource-icons/diamond.png" alt="钻石" class="h-5 w-5 shrink-0 object-contain">
               钻石
             </div>
@@ -680,25 +731,13 @@ useIntervalFn(updateCountdowns, 1000)
               {{ formatCouponAmount(status?.status?.diamond || 0) }}
             </div>
           </div>
-          <div class="min-w-0 text-right">
-            <div class="flex items-center justify-end gap-1.5 text-xs text-gray-500">
+          <div class="min-w-0">
+            <div class="flex items-center gap-1.5 text-xs text-gray-500">
               <img src="/game-config/resource-icons/gold-bean.png" alt="金豆豆" class="h-5 w-5 shrink-0 object-contain">
               金豆
             </div>
             <div class="text-2xl text-amber-500 font-bold dark:text-amber-400">
               {{ formatGoldBeanAmount(status?.status?.goldBean || 0) }}
-            </div>
-          </div>
-        </div>
-        <div class="mt-4 border-t border-gray-100/80 pt-3 dark:border-gray-700/80">
-          <div class="flex items-center justify-between">
-            <div class="flex items-center gap-2">
-              <div class="h-2.5 w-2.5 rounded-full" :class="status?.connection?.connected ? 'bg-green-500' : currentStatusReady ? 'bg-red-500' : 'bg-gray-300'" />
-              <span class="text-xs font-bold">{{ status?.connection?.connected ? '在线' : currentStatusReady ? '离线' : '检查中' }}</span>
-            </div>
-            <div class="flex items-center gap-1.5 text-xs text-gray-400">
-              <div class="i-fas-clock text-purple-400" />
-              {{ formatDuration(localUptime) }}
             </div>
           </div>
         </div>

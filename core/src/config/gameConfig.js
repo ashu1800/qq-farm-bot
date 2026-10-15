@@ -39,6 +39,8 @@ const staticItemInfoMap = new Map([
     [5006, { id: 5006, name: '乌云使坏瓶' }],
     [2159, { id: 2159, name: '雨落成诗头像框' }],
     [100003, { id: 100003, name: '化肥礼包' }],
+    [1041, { id: 1041, name: '奶茶券' }],
+    [1042, { id: 1042, name: '宣传喇叭' }],
 ]);
 const staticItemImageMap = new Map([
     [6001, '/activity/wish-sign/firework.png'],
@@ -318,18 +320,23 @@ function getLevelExpTable() {
 
 /**
  * 获取升级所需经验进度
- * @returns {{current: number, needed: number}}
+ *
+ * 注意：`RoleLevel.json` 是跨级累计经验表，`exp` 不会因升级清零。
+ * 到达等级表上限时不再有下一级，返回 `maxed: true`，调用方必须据此隐藏
+ * 进度数值与升级预估（历史实现在满级时会返回 { current: 65600, needed: 1 }）。
+ * @returns {{current: number, needed: number, maxed: boolean}} 当前级已获得经验、升级所需总经验、是否已满级
  */
 function getLevelExpProgress(level, exp) {
-    const result = { current: 0, needed: 0 };
-    if (!levelExpTable || level <= 0) return result;
+    if (!levelExpTable || level <= 0) return { current: 0, needed: 0, maxed: false };
+
+    const nextLevelExp = levelExpTable[level + 1];
+    if (!Number.isFinite(nextLevelExp)) return { current: 0, needed: 0, maxed: true };
 
     const currentLevelExp = levelExpTable[level] || 0;
-    const nextLevelExp = levelExpTable[level + 1] || currentLevelExp + 1;
     const progress = Math.max(0, exp - currentLevelExp);
-    const totalNeeded = nextLevelExp - currentLevelExp;
+    const totalNeeded = Math.max(0, nextLevelExp - currentLevelExp);
 
-    return { current: progress, needed: totalNeeded };
+    return { current: progress, needed: totalNeeded, maxed: false };
 }
 
 /** 根据植物ID获取植物 */
@@ -415,37 +422,25 @@ function getPlantExp(plantId) {
 
 /**
  * 获取种子收获信息
+ *
+ * 果实单价统一走 `getFruitPrice(fruit.id)`，与 `services/plant-economy.js` 同一口径；
+ * 历史实现用「种子 ID 末四位匹配 type=4 物品」查价，等价但属于第二套定价逻辑，已移除。
  * @param {number} seedId - 种子ID
- * @returns {{expPerSeason: number, seasons: number, incomePerSeason: number}}
+ * @returns {{expPerSeason: number, seasons: number, incomePerSeason: number, priceKnown: boolean}} 每季经验、季数、每季收入、果实价格是否已知
  */
 function getSeedHarvestInfo(seedId) {
-    const plant = seedToPlant.get(seedId);
+    const plant = seedToPlant.get(Number(seedId) || 0);
     if (!plant) {
-        return { expPerSeason: 0, seasons: 1, incomePerSeason: 0 };
+        return { expPerSeason: 0, seasons: 1, incomePerSeason: 0, priceKnown: false };
     }
 
     const expPerSeason = plant.exp || 0;
     const seasons = plant.seasons || 1;
     const fruitCount = (plant.fruit && plant.fruit.count) || 0;
-
-    // 通过种子ID的末位匹配果实价格
-    const seedIdStr = String(seedId);
-    const suffix = seedIdStr.slice(-4);
-    let fruitUnitPrice = 0;
-
-    for (const [itemId, itemInfo] of itemInfoMap) {
-        // type === 4 表示果实类型物品
-        if (Number(itemInfo.type) === 4) {
-            const itemIdStr = String(itemId);
-            if (itemIdStr.endsWith(suffix)) {
-                fruitUnitPrice = Number(itemInfo.price) || 0;
-                break;
-            }
-        }
-    }
-
+    const fruitUnitPrice = getFruitPrice(Number(plant.fruit && plant.fruit.id) || 0);
     const incomePerSeason = fruitUnitPrice * fruitCount;
-    return { expPerSeason, seasons, incomePerSeason };
+
+    return { expPerSeason, seasons, incomePerSeason, priceKnown: fruitUnitPrice > 0 };
 }
 
 /** 根据果实ID获取果实名 */

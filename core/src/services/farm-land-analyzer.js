@@ -2,16 +2,114 @@ const { PlantPhase, PHASE_NAMES } = require('../config/config');
 const { getPlantName, getPlantExp, getPlantById, getPlantGrowTime, getPlantGrowPhases, getSeedImageBySeedId, getMutantDisplayPlantId, getMutantPlantImageByPhase, getMutantEffectsByIds } = require('../config/gameConfig');
 const { toNum, toTimeSec, getServerTimeSec, logWarn } = require('../utils/utils');
 const { getAllLands } = require('./farm-api');
+const { recordSeasonObservation } = require('./plant-model');
 
 const GOLDEN_BUG_ITEM_ID = 301101;
 const GOLDEN_BUG_SOCIAL_TYPE = 2;
 const MATURE_PHASE_RECORD_ID = 19;
+/** 季时长推导与配置值的允许偏差（秒） */
+const SEASON_DURATION_TOLERANCE_SEC = 60;
+/** 已完成首季自校验的植物，验证前不采信任何多季实测 */
+let seasonDerivationVerified = false;
+const seasonDerivationWarnedPlantIds = new Set();
 
 function hasGoldenBug(plant) {
   return !!(plant && Array.isArray(plant.social_items) && plant.social_items.some(item => (
     toNum(item && item.item_id) === GOLDEN_BUG_ITEM_ID &&
     toNum(item && item.type) === GOLDEN_BUG_SOCIAL_TYPE
   )));
+}
+
+/**
+ * 规范化 LandInfo.buff（土地 buff 会改变时长、产量、经验与变异概率）
+ * @returns {{plantYieldBonus: number, plantingTimeReduction: number, plantExpBonus: number, plantMutantBonus: number}|null} 无 buff 时返回 null
+ */
+function getLandBuff(land) {
+  const buff = land && land.buff;
+  if (!buff || typeof buff !== 'object') return null;
+  return {
+    plantYieldBonus: toNum(buff.plant_yield_bonus),
+    plantingTimeReduction: toNum(buff.planting_time_reduction),
+    plantExpBonus: toNum(buff.plant_exp_bonus),
+    plantMutantBonus: toNum(buff.plant_mutant_bonus)
+  };
+}
+
+/**
+ * 从地块阶段时间线推导并记录「每季生长时长」实测样本
+ *
+ * 服务端 `phases` 是「从当前阶段开始的配置后缀」，因此：
+ *   本季已过时长 = Σ 配置中当前阶段之前的阶段时长
+ *   本季剩余时长 = max(begin_time) − 当前阶段 begin_time
+ *   本季总时长   = 已过 + 剩余
+ * 该推导不依赖服务端回传已过阶段的 begin_time。
+ *
+ * 采信前先做首季自校验：第 1 季的推导值必须与 Plant.json 的 grow_phases 求和一致
+ * （差值 ≤ SEASON_DURATION_TOLERANCE_SEC）。只有校验通过后才允许记录第 2 季及以后的实测值；
+ * 推导规则一旦不成立，就退回 plant-economy 的假定值，而不是写入错误样本。
+ * 用过化肥（ferts_used 非空）、被催熟（is_nudged）或带 planting_time_reduction 的地块会跳过，
+ * 避免把加速效果当成基线。
+ */
+function observePlantModel(lands, landMap = null) {
+  for (const land of (Array.isArray(lands) ? lands : [])) {
+    try {
+      if (!land || !land.unlocked) continue;
+      if (landMap && isOccupiedSlaveLand(land, landMap)) continue;
+      if (toNum(land.buff && land.buff.planting_time_reduction) > 0) continue;
+
+      const plant = land.plant;
+      const phases = Array.isArray(plant && plant.phases) ? plant.phases : [];
+      const plantId = toNum(plant && plant.id);
+      if (!plantId || phases.length === 0) continue;
+      if (plant.is_nudged) continue;
+      if (phases.some(item => item && item.ferts_used && Object.keys(item.ferts_used).length > 0)) continue;
+
+      const configPhases = getPlantGrowPhases(plantId);
+      if (configPhases.length < phases.length) continue;
+
+      const begins = phases.map(item => toTimeSec(item && item.begin_time));
+      if (begins.some(value => value <= 0)) continue;
+      const remainingSec = Math.max(...begins) - begins[0];
+      if (remainingSec <= 0) continue;
+
+      const startIndex = configPhases.length - phases.length;
+      let elapsedSec = 0;
+      for (let index = 0; index < startIndex; index += 1) {
+        elapsedSec += Number(configPhases[index] && configPhases[index].duration) || 0;
+      }
+      const derivedSec = elapsedSec + remainingSec;
+      if (derivedSec <= 0) continue;
+
+      const configFirstSec = getPlantGrowTime(plantId);
+      const seasonIndex = Math.max(1, toNum(plant.season) || 1);
+
+      if (seasonIndex === 1) {
+        // 自校验：首季推导值必须与配置一致，否则这条推导规则不成立，一律不采信。
+        const secondsMatch = configFirstSec > 0
+          && Math.abs(derivedSec - configFirstSec) <= SEASON_DURATION_TOLERANCE_SEC;
+        if (!secondsMatch) {
+          if (!seasonDerivationWarnedPlantIds.has(plantId)) {
+            seasonDerivationWarnedPlantIds.add(plantId);
+            logWarn('配置', `季时长推导自校验未通过：植物 ${plantId} 推导 ${derivedSec}s / 配置 ${configFirstSec}s，暂不记录多季实测`, {
+              module: 'config', event: '季时长校准', result: 'warn', plantId, derivedSec, configFirstSec
+            });
+          }
+          continue;
+        }
+        seasonDerivationVerified = true;
+        continue;
+      }
+
+      if (!seasonDerivationVerified) continue;
+      // 合理性边界：与首季配置相差超过 10 倍或不足 10% 的推导值视为异常，不采信。
+      if (configFirstSec > 0) {
+        const ratio = derivedSec / configFirstSec;
+        if (ratio < 0.1 || ratio > 3) continue;
+      }
+
+      recordSeasonObservation(plantId, seasonIndex, derivedSec, { source: 'land' });
+    } catch { }
+  }
 }
 
 // ─── 辅助函数 ───
@@ -249,6 +347,9 @@ function analyzeLands(lands, debug = false) {
 
   const serverTime = getServerTimeSec();
   const landMap = buildLandMap(lands);
+
+  // 巡田顺带采集季时长实测样本（带首季自校验，见 observePlantModel）
+  observePlantModel(lands, landMap);
 
   for (const land of lands) {
     const landId = toNum(land.id);
@@ -593,7 +694,8 @@ async function getLandsDetail() {
         level, maxLevel, landsLevel, landSize, landType, landTypeName,
         couldUnlock, couldUpgrade,
         occupiedByMaster, masterLandId, occupiedLandIds,
-        plantSize, mutantEffects, qixiDew
+        plantSize, mutantEffects, qixiDew,
+        buff: getLandBuff(sourceLand)
       });
     }
 
@@ -611,7 +713,18 @@ module.exports = {
   getDisplayLandContext,
   isOccupiedSlaveLand,
   analyzeLands,
+  observePlantModel,
+  getLandBuff,
   resolveRemovableHarvestedLands,
   getQixiDewStatus,
   getLandsDetail
+};
+
+module.exports._test = {
+  /** 重置季时长推导自校验状态（测试用） */
+  resetSeasonDerivation() {
+    seasonDerivationVerified = false;
+    seasonDerivationWarnedPlantIds.clear();
+  },
+  isSeasonDerivationVerified: () => seasonDerivationVerified,
 };

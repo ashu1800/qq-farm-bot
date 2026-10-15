@@ -204,7 +204,7 @@ const { pause: stopQqCheck, resume: startQqCheck } = useIntervalFn(async () => {
     if (data.data.status === 'confirmed') {
       stopQqCheck()
       qqLoading.value = true
-      qqStatus.value = '正在获取农场 Code 并清理 QQ 会话…'
+      qqStatus.value = '正在获取农场 Code…'
       const result = await api.post(`/api/napcat-login/tasks/${qqTaskId.value}/code`, undefined, { timeout: 120000, skipErrorToast: true } as any)
       if (!result.data?.ok || !result.data.data?.code)
         throw new Error(result.data?.error || '获取农场 Code 失败')
@@ -637,7 +637,7 @@ watch(activeTab, (tab) => {
             </p>
           </div>
           <div class="text-center text-xs opacity-60" :style="{ color: 'var(--theme-text)' }">
-            扫码成功后会自动获取 Code，并退出临时 NapCat QQ 会话
+            扫码成功后会自动获取 Code；QQ 会话保留在 NapCat 中，Code 失效时会自动快速登录续期，无需重新扫码
           </div>
         </div>
 

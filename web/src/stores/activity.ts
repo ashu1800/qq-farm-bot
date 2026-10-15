@@ -365,6 +365,8 @@ export const useActivityStore = defineStore('activity', () => {
   const wishSignLoading = ref(false)
   const shareRewardActivity = ref<any | null>(null)
   const shareRewardLoading = ref(false)
+  const milkTeaActivity = ref<any | null>(null)
+  const milkTeaLoading = ref(false)
   const petDiaryActivity = ref<PetDiaryActivityData | null>(null)
   const petDiaryLoading = ref(false)
   const petDiaryError = ref('')
@@ -394,6 +396,7 @@ export const useActivityStore = defineStore('activity', () => {
     charityFlowerActivity.value = null
     wishSignActivity.value = null
     shareRewardActivity.value = null
+    milkTeaActivity.value = null
     petDiaryActivity.value = null
     petDiaryError.value = ''
     qixiFriends.value = []
@@ -462,6 +465,25 @@ export const useActivityStore = defineStore('activity', () => {
       return data
     }
     finally { shareRewardLoading.value = false }
+  }
+
+  async function fetchMilkTeaActivity(accountId: string) {
+    milkTeaLoading.value = true
+    try {
+      const { data } = await api.get('/api/activity/milk-tea', { headers: { 'x-account-id': accountId } })
+      if (data.ok && isCurrentAccount(String(accountId))) milkTeaActivity.value = data.activity || null
+      return data
+    }
+    finally { milkTeaLoading.value = false }
+  }
+
+  async function operateMilkTea(accountId: string, action: string, params: { slotId?: number, count?: number } = {}) {
+    const { data } = await api.post(
+      '/api/activity/milk-tea/operate',
+      { action, ...params },
+      { headers: { 'x-account-id': accountId }, timeout: 60000 },
+    )
+    return data
   }
 
   async function fetchPetDiaryActivity(accountId: string) {
@@ -705,6 +727,8 @@ export const useActivityStore = defineStore('activity', () => {
     wishSignLoading,
     shareRewardActivity,
     shareRewardLoading,
+    milkTeaActivity,
+    milkTeaLoading,
     petDiaryActivity,
     petDiaryLoading,
     petDiaryError,
@@ -729,6 +753,8 @@ export const useActivityStore = defineStore('activity', () => {
     fetchCharityFlowerActivity,
     fetchWishSignActivity,
     fetchShareRewardActivity,
+    fetchMilkTeaActivity,
+    operateMilkTea,
     fetchPetDiaryActivity,
     buildQixiBridge,
     useQixiDew,

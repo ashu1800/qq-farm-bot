@@ -6,6 +6,7 @@ const { getAutomation } = require('../models/store');
 const { recordOperation } = require('./stats');
 const { getAllLands, fertilize, NORMAL_FERTILIZER_ID, ORGANIC_FERTILIZER_ID } = require('./farm-api');
 const { getCurrentPhase } = require('./farm-land-analyzer');
+const { recordFertilizerObservation } = require('./plant-model');
 
 // ─── 常量 ───
 
@@ -32,12 +33,89 @@ function isTransientNetworkError(err) {
   ].some(pattern => msg.includes(pattern));
 }
 
+/** 从原始地块数据推导剩余成熟秒数（无法推导时返回 null） */
+function getRemainingMatureSec(land) {
+  const plant = land && land.plant;
+  const phases = Array.isArray(plant && plant.phases) ? plant.phases : [];
+  const maturePhase = phases.find(phase => toNum(phase && phase.phase) === 6);
+  const matureAt = toTimeSec(maturePhase && maturePhase.begin_time);
+  if (matureAt <= 0) return null;
+  return Math.max(0, matureAt - getServerTimeSec());
+}
+
+/** 构建「地块 ID → 施肥前剩余成熟秒数」映射 */
+function buildRemainingMatureMap(lands) {
+  const map = new Map();
+  for (const land of (Array.isArray(lands) ? lands : [])) {
+    const landId = toNum(land && land.id);
+    if (!landId) continue;
+    const remain = getRemainingMatureSec(land);
+    if (Number.isFinite(remain)) map.set(landId, remain);
+  }
+  return map;
+}
+
+/** 记录一条化肥减秒样本，并在与容器消耗不一致时打一条受样本节流约束的 warn */
+function applyFertilizerReduction({ type, reduceSec, consumedSec, landId }) {
+  if (!reduceSec || reduceSec <= 0) return;
+  const result = recordFertilizerObservation(type, reduceSec);
+  if (result.recorded && consumedSec > 0 && Math.abs(reduceSec - consumedSec) / consumedSec > 0.1) {
+    logWarn('施肥', `化肥减秒与消耗秒数不一致：地块实际减少 ${reduceSec}s，容器消耗 ${consumedSec}s`, {
+      module: 'farm', event: '化肥减秒校准', result: 'warn',
+      landId: toNum(landId), type, reduceSec, consumedSec
+    });
+  }
+}
+
+/** 由「剩余成熟时间差值」与「容器消耗秒数」推导本次减秒 */
+function resolveReduceSec(before, after, consumedSec) {
+  if (Number.isFinite(before) && Number.isFinite(after)) return Math.max(0, before - after);
+  return consumedSec > 0 ? consumedSec : 0;
+}
+
+/**
+ * 解析一次施肥回复，记录化肥减秒实测样本
+ *
+ * 减秒优先取「施肥前后剩余成熟时间的差值」（真实效果），缺地块数据时退回
+ * `FertilizeReply.fertilizer_use.consumed`（本次消耗的肥料秒数）。
+ */
+function collectFertilizerReduction({ body, landId, fertilizerId, beforeMap }) {
+  try {
+    const reply = types.FertilizeReply.decode(body);
+    const consumedSec = Math.max(0, toNum(reply && reply.fertilizer_use && reply.fertilizer_use.consumed && reply.fertilizer_use.consumed.count));
+    const afterLands = (reply && reply.land) || [];
+    const after = getRemainingMatureSec(afterLands.length > 0 ? afterLands[0] : null);
+    const before = beforeMap && beforeMap instanceof Map ? beforeMap.get(toNum(landId)) : null;
+    const type = toNum(fertilizerId) === toNum(ORGANIC_FERTILIZER_ID) ? 'organic' : 'normal';
+    applyFertilizerReduction({ type, reduceSec: resolveReduceSec(before, after, consumedSec), consumedSec, landId });
+  } catch { }
+}
+
+/** 处理 farm-api.fertilize 返回的减秒明细（已解码，含施肥后的地块） */
+function recordFertilizeResult(result, beforeMap) {
+  const reductions = (result && result.reductions) || [];
+  for (const item of reductions) {
+    try {
+      const after = getRemainingMatureSec(item.lands && item.lands[0]);
+      const before = beforeMap && beforeMap instanceof Map ? beforeMap.get(toNum(item.landId)) : null;
+      const type = toNum(item.fertilizerId) === toNum(ORGANIC_FERTILIZER_ID) ? 'organic' : 'normal';
+      applyFertilizerReduction({
+        type,
+        reduceSec: resolveReduceSec(before, after, toNum(item.consumedSec)),
+        consumedSec: toNum(item.consumedSec),
+        landId: item.landId
+      });
+    } catch { }
+  }
+}
+
 /**
  * 有机化肥循环施肥（逐块施肥直到失败）
  * @param {number[]} landIds - 地块 ID 列表
+ * @param {Map<number, number>} [beforeMap] - 施肥前各地块剩余成熟秒数，用于化肥减秒实测
  * @returns {number} 成功施肥次数
  */
-async function fertilizeOrganicLoop(landIds) {
+async function fertilizeOrganicLoop(landIds, beforeMap = null) {
   const ids = (Array.isArray(landIds) ? landIds : []).filter(Boolean);
   if (ids.length === 0) return 0;
 
@@ -50,8 +128,9 @@ async function fertilizeOrganicLoop(landIds) {
         land_ids: [toNum(landId)],
         fertilizer_id: toNum(ORGANIC_FERTILIZER_ID)
       })).finish();
-      await sendMsgAsync('gamepb.plantpb.PlantService', 'Fertilize', payload);
+      const { body } = await sendMsgAsync('gamepb.plantpb.PlantService', 'Fertilize', payload);
       successCount++;
+      collectFertilizerReduction({ body, landId, fertilizerId: ORGANIC_FERTILIZER_ID, beforeMap });
     } catch {
       break;
     }
@@ -320,7 +399,9 @@ async function runFertilizerByConfig(explicitLandIds = [], options = {}) {
 
   // 普通化肥
   if (!skipNormal && (mode === 'normal' || mode === 'both' || mode === 'smart') && targetIds.length > 0) {
-    normalCount = await fertilize(targetIds, NORMAL_FERTILIZER_ID);
+    const fertilizeResult = await fertilize(targetIds, NORMAL_FERTILIZER_ID);
+    normalCount = fertilizeResult.count;
+    recordFertilizeResult(fertilizeResult, buildRemainingMatureMap(allLands));
     if (normalCount > 0) {
       log('施肥', `${label}：已为 ${normalCount}/${targetIds.length} 块地施普通化肥（范围: ${landTypeLabels.join('、')}）`, {
         module: 'farm', event: eventLabel, result: 'ok', reason, type: 'normal',
@@ -339,7 +420,7 @@ async function runFertilizerByConfig(explicitLandIds = [], options = {}) {
     if (landTypeMap.size > 0) {
       organicTargets = filterLandIdsByTypes(organicTargets, landTypeMap, landTypes);
     }
-    organicCount = await fertilizeOrganicLoop(organicTargets);
+    organicCount = await fertilizeOrganicLoop(organicTargets, buildRemainingMatureMap(allLands));
     if (organicCount > 0) {
       log('施肥', `${label}：有机化肥循环施肥完成，共施 ${organicCount} 次（范围: ${landTypeLabels.join('、')}）`, {
         module: 'farm', event: eventLabel, result: 'ok', reason, type: 'organic',
@@ -351,6 +432,8 @@ async function runFertilizerByConfig(explicitLandIds = [], options = {}) {
       mode === 'final_normal' || mode === 'final_organic') {
     // 智能/最终阶段施肥：寻找目标作物施肥
     let targetFertilizerLands = [];
+    // 用于化肥减秒实测的「施肥前」地块快照
+    let calibrationLands = allLands;
     const isFinalStageMode = mode === 'final_normal' || mode === 'final_organic';
     const explicitIdSet = new Set(explicitIds);
 
@@ -364,6 +447,7 @@ async function runFertilizerByConfig(explicitLandIds = [], options = {}) {
 
       try {
         const landsReply = await getAllLands();
+        calibrationLands = (landsReply && landsReply.lands) || allLands;
         targetFertilizerLands = getFastMatureLands(landsReply && landsReply.lands, smartSeconds);
       } catch (err) {
         if (!isTransientNetworkError(err)) {
@@ -381,11 +465,14 @@ async function runFertilizerByConfig(explicitLandIds = [], options = {}) {
       const typeLabel = useOrganic ? '有机' : '普通';
       const fertId = useOrganic ? ORGANIC_FERTILIZER_ID : NORMAL_FERTILIZER_ID;
       const modeLabel = isFinalStageMode ? '最终阶段' : '快成熟';
+      const beforeMap = buildRemainingMatureMap(calibrationLands);
 
       if (useOrganic) {
-        organicCount = await fertilizeOrganicLoop(targetFertilizerLands);
+        organicCount = await fertilizeOrganicLoop(targetFertilizerLands, beforeMap);
       } else {
-        normalCount = await fertilize(targetFertilizerLands, fertId);
+        const fertilizeResult = await fertilize(targetFertilizerLands, fertId);
+        normalCount = fertilizeResult.count;
+        recordFertilizeResult(fertilizeResult, beforeMap);
       }
 
       const totalCount = useOrganic ? organicCount : normalCount;

@@ -61,7 +61,9 @@ VOLUME ["/app/core/data"]
 
 EXPOSE 3007 18000
 
+# /api/status 未登录返回 401，且 busybox wget 会把 localhost 解析为 IPv6 ::1；
+# 用免鉴权的 /api/health + 127.0.0.1（compose 中同款覆盖以此为准）。
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD wget -q --spider http://localhost:3007/api/status || exit 1
+    CMD wget -q --spider http://127.0.0.1:3007/api/health || exit 1
 
 CMD ["node", "client.js"]

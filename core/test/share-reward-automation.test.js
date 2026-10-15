@@ -7,7 +7,8 @@ const store = require('../src/models/store');
 
 const source = fs.readFileSync(path.join(__dirname, '../src/core/worker.js'), 'utf8');
 const start = source.indexOf('        if (shareRewardShareEnabled || claimShareDailyEnabled || claimShareMilestonesEnabled)');
-const end = source.indexOf('        if (buyRainPoemBottleEnabled', start);
+// 奶茶热销中的自动化块紧跟其后，截取必须在它开始前结束，避免把无关块卷进沙箱。
+const end = source.indexOf('        // 奶茶热销中：每日奶茶收益', start);
 assert.ok(start >= 0 && end > start);
 const block = source.slice(start, end);
 

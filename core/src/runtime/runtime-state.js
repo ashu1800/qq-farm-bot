@@ -193,7 +193,10 @@ function createRuntimeState(deps) {
             limits: {},
             wsError: null,
             automation: store.getAutomation(aid),
-            expProgress: { current: 0, needed: 0, level: 0 },
+            // 与 worker 侧字段一致：页面按 levelProgress 渲染进度与升级预估。
+            levelProgress: { current: 0, needed: 0, maxed: false },
+            // 离线/未启动时没有效率数据，前端显示「数据积累中」。
+            expRate: null,
             configRevision,
             accountId: aid
         };

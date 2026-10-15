@@ -8,6 +8,10 @@
 
 # 当前状态
 
+- 效率统计与升级预估已重构（2026-10-15）：「效率」改为在线活跃滑动窗口经验速率，
+  升级预估由同一速率与等级进度计算；作物效率统一到 `core/src/services/plant-economy.js`，
+  多季作物时长口径改为「每季 = 首季」，收益未知作物输出 `null`，并新增季时长/化肥减秒的
+  自动校准采集。详见文末「2026-10-15 效率统计与升级预估重构」。
 - TSDK/ACE 安全链路已升级到 2026-09-24 本机官方展开包中的
   `v3.9.0.1790160550` WASM（161081 字节，SHA-256
   `2c9e377ecc9a4fd9019f12191b589d543a60d6654580eb3e237b35f1fa5b1cb7`）。
@@ -127,3 +131,51 @@
   `core/docs/activity-update-runbook.md`，并新增
   `npm run inspect:activity-har -- <HAR>` 脱敏检查命令，后续活动按“完整抓包、协议表、
   官方资源、种子/植物/果实映射、分层接入、离线与在线验收”流程更新。
+
+## 2026-10-15 效率统计与升级预估重构
+
+### 改了什么
+
+- 新增 `core/src/services/exp-rate.js`：每账号的经验采样（状态同步 + 经验变化通知）、
+  在线活跃滑动窗口速率与升级预估。有效区间 = 相邻样本两端都在线、间隔 ≤ 5 分钟、
+  经验与等级均不倒退；先看最近 1 小时，有效观测不足 10 分钟或样本对不足 3 个时放宽到
+  6 小时，仍不足则输出 `ready: false`。
+- 新增 `core/src/services/plant-economy.js`：单株时长/收益/效率的唯一口径来源，
+  `analytics.js` 只负责排序，`planting-service.js` 的清空时间估算与
+  `gameConfig.getSeedHarvestInfo` 的果实定价都改走这里。
+- 新增 `core/src/services/plant-model.js`：全局校准存储 `data/plant-model.json`
+  （与账号无关，作物时长是游戏常数）。历史采样点抽稀（最近 5 分钟保留全部、
+  更早每 2 分钟保留一个），稳定后不再写盘。
+- 采集入口：`farm-land-analyzer.observePlantModel()` 每次巡田从阶段时间线推导季时长
+  （`phases` 是「当前阶段开始的配置后缀」，首季先与 `Plant.grow_phases` 自校验 ±60 秒，
+  通过后才采信第 2 季及以后；带 `planting_time_reduction`、用过化肥、被催熟的地块跳过）；
+  `farm-fertilizer`/`farm-api.fertilize()` 用 `FertilizeReply.fertilizer_use.consumed`
+  与地块前后剩余成熟时间实测化肥减秒（`fertilize()` 返回值改为 `{ count, reductions }`）。
+- 前端只消费后端字段：`Dashboard.vue` 的效率/升级预估/满级分支，`Analytics.vue` 的
+  「未知」收益与「估算」角标、利润策略过滤 `priceKnown === false`。
+
+### 口径与行为变化（用户可见）
+
+- 效率数值口径变了：剔除离线时段且不再拿进程运行时长做分母，数值通常比旧版小但真实；
+  worker 重启后不再归零，样本随 `data/stats/<accountId>.json` 的 `expSamples` 持久化。
+- 双季作物总时长从 `首季 × 1.5` 改为 `首季 × 2`（与 2x2 预留、种子商城的既有口径一致），
+  双季作物每小时经验下降约 25%，**自动选种结果会变化**（用户已确认接受）。
+- 收益未知作物（果实不在 `ItemInfo` 中：80 种，其中 66 种为活动作物）不再输出 0 或负数利润，
+  分析页显示「未知」，`max_profit` / `max_fert_profit` 不再推荐它们。
+- 满级（200 级）不再返回 `{ current: 65600, needed: 1 }`，改为 `{ current: 0, needed: 0, maxed: true }`。
+
+### 验证
+
+- 新增测试：`core/test/exp-rate.test.js`（12）、`core/test/plant-economy.test.js`（11）、
+  `core/test/analytics-ranking.test.js`（6）、`core/test/plant-model.test.js`（7）。
+- `cd core && node --test test/*.test.js`：435 通过，失败仍为改动前那 2 个已知红灯
+  （`crystal-animation.test.js` 本机无 `python3`、`pet-diary-automation.test.js`
+  萌宠活动窗口已过期），未新增失败。
+- `cd web && npx vue-tsc -b --force && npx vite build` 通过。
+
+### 待人工验收
+
+- 真实账号在线 30 分钟后，页面效率应与「在线期间经验增量 ÷ 在线小时数」一致（±10%）；
+  经验增长时升级预估应单调下降；分析页未知收益作物显示「未知」且带「估算」角标。
+- 校准依赖真实观测：至少一次双季作物收获后才会出现 `season >= 2` 的实测记录；
+  在此之前多季时长保持「估算」标记。

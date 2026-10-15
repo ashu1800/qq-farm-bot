@@ -15,6 +15,7 @@ core/data/*.json
 !core/data/.gitkeep
 web/dist
 web/node_modules
+core/node_modules
 coverage
 .nyc_output
 *.tsbuildinfo

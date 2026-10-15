@@ -29,3 +29,7 @@ temp/
 
 # 配置合并脚本产生的备份
 *.bak
+
+# Windows 重定向残留：文件名为保留设备名，Git 无法索引（会让 git add -A 整体失败）
+/nul
+.zcode/

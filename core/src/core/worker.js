@@ -175,6 +175,16 @@ setLogHook((tag, msg, isWarn, meta) => {
 setRecordGoldExpHook((gold, exp) => {
     const { recordGoldExp } = require('../services/stats');
     recordGoldExp(gold, exp);
+    // 经验变化通知到达时立即采样，让突发增量带上准确时间点（效率统计用）。
+    try {
+        const { recordExpSample } = require('../services/exp-rate');
+        const ws = getWs();
+        recordExpSample({
+            exp: Number(exp) || 0,
+            level: Number(getUserState().level) || 0,
+            online: !!(loginReady && ws && ws.readyState === 1)
+        });
+    } catch { }
     sendToMaster({
         type: 'stat_update',
         data: { gold, exp }
@@ -507,6 +517,8 @@ async function runStarActivityAutoClaims() {
     const shareRewardShareEnabled = automation.share_reward_share === true;
     const claimShareDailyEnabled = automation.share_reward_daily === true;
     const claimShareMilestonesEnabled = automation.share_reward_milestones === true;
+    const claimMilkTeaDailyEnabled = automation.milk_tea_daily === true;
+    const claimMilkTeaMilestonesEnabled = automation.milk_tea_milestones === true;
     const petDiaryAdoptEnabled = automation.pet_diary_adopt === true;
     const petDiaryFeedEnabled = automation.pet_diary_feed === true;
     const petDiaryDrawEnabled = automation.pet_diary_draw === true;
@@ -527,7 +539,8 @@ async function runStarActivityAutoClaims() {
         && !buyRainPoemBottleEnabled && !collectRainPoemWeatherEnabled && !useRainPoemSummonEnabled && !useRainPoemPrankEnabled
         && !unlockRainPoemResearchEnabled && !claimCharityShareEnabled && !donateCharityLoveEnabled
         && !claimCharityRewardsEnabled && !claimCharityPublicFundEnabled && !petDiaryAnyEnabled
-        && !drawWishSignEnabled && !claimWishSignEnabled && !shareRewardShareEnabled && !claimShareDailyEnabled && !claimShareMilestonesEnabled) return;
+        && !drawWishSignEnabled && !claimWishSignEnabled && !shareRewardShareEnabled && !claimShareDailyEnabled && !claimShareMilestonesEnabled
+        && !claimMilkTeaDailyEnabled && !claimMilkTeaMilestonesEnabled) return;
 
     starActivityClaimRunning = true;
     try {
@@ -769,6 +782,26 @@ async function runStarActivityAutoClaims() {
                 }
             } catch (err) {
                 log('活动', `快乐不独享自动领取失败: ${err.message}`, { module: 'activity', event: '快乐不独享自动领取', result: 'error' });
+            }
+        }
+
+        // 奶茶热销中：每日奶茶收益（red_dots.daily）+ 营业额档位（state===2）。
+        // 2026110104 的 share_reward 体与快乐不独享同构，cmd 73/70 为强证据复用。
+        if (claimMilkTeaDailyEnabled || claimMilkTeaMilestonesEnabled) {
+            try {
+                const { isMilkTeaActive, getMilkTeaActivity, operateMilkTea } = require('../services/activity');
+                if (isMilkTeaActive()) {
+                    let milkTea = await getMilkTeaActivity();
+                    if (claimMilkTeaDailyEnabled && milkTea.shareRewards.unclaimed.daily) {
+                        await operateMilkTea('daily');
+                        milkTea = await getMilkTeaActivity();
+                    }
+                    if (claimMilkTeaMilestonesEnabled && milkTea.shareRewards.milestones.some(tier => tier.state === 2)) {
+                        await operateMilkTea('milestones');
+                    }
+                }
+            } catch (err) {
+                log('活动', `奶茶热销中自动领取失败: ${err.message}`, { module: 'activity', event: '奶茶热销中自动领取', result: 'error' });
             }
         }
 
@@ -1943,13 +1976,15 @@ async function handleApiCall(msg) {
                 break;
             }
             case 'getWishSignActivity':
-            case 'getShareRewardActivity': {
+            case 'getShareRewardActivity':
+            case 'getMilkTeaActivity': {
                 const activity = require('../services/activity');
                 result = await activity[method]();
                 break;
             }
             case 'operateWishSign':
-            case 'operateShareReward': {
+            case 'operateShareReward':
+            case 'operateMilkTea': {
                 const activity = require('../services/activity');
                 result = await activity[method](...args);
                 break;
@@ -2038,7 +2073,8 @@ async function handleApiCall(msg) {
                     log('施肥', `正在对土地 ${  landId  } 使用有机肥料催熟`, {
                         module: 'farm', event: '催熟', landId
                     });
-                    const fertilizeCount = await fertilize([landId], ORGANIC_FERTILIZER_ID);
+                    const fertilizeResult = await fertilize([landId], ORGANIC_FERTILIZER_ID);
+                    const fertilizeCount = fertilizeResult.count;
                     if (fertilizeCount > 0) {
                         log('施肥', `土地 ${  landId  } 催熟成功`, {
                             module: 'farm', event: '催熟', result: 'ok', landId
@@ -2217,7 +2253,7 @@ function syncStatus() {
     }
 
     const limits = require('../services/friend').getOperationLimits();
-    const stats = require('../services/stats').getStats(statusData, userState, connected, limits);
+    const stats = require('../services/stats').getStats(statusData, userState, connected, limits, { levelProgress });
 
     const now = Date.now();
     const farmRemainSec = Math.max(0, Math.ceil((Number(nextFarmRunAt || 0) - now) / 1000));

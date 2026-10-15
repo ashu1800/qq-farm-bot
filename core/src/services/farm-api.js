@@ -1,6 +1,6 @@
 const { sendMsgAsync, getUserState } = require('../utils/network');
 const { types, waitForProtoReady } = require('../utils/proto');
-const { toLong, sleep, log } = require('../utils/utils');
+const { toLong, toNum, sleep } = require('../utils/utils');
 
 /** 普通化肥 ID */
 const NORMAL_FERTILIZER_ID = 1011;
@@ -77,20 +77,38 @@ async function insecticide(landIds) {
 
 /**
  * 施肥
+ *
+ * 返回值从「成功次数」改为 `{ count, reductions }`：`FertilizeReply.fertilizer_use.consumed`
+ * 已由抓包与紧随其后的 ItemNotify 交叉验证为「本次消耗的肥料秒数」（`corepb.Item.count`），
+ * 地块前后剩余成熟时间的差值则是本次实际减少的生长时间。二者用于化肥效果的实测校准
+ * （见 services/plant-model.js），不再靠「第一个阶段时长」猜测。
+ *
  * @param {number[]} landIds - 地块 ID 列表
  * @param {number} fertilizerId - 化肥类型（默认普通化肥）
- * @returns {number} 成功施肥次数
+ * @returns {Promise<{count: number, reductions: Array<{landId: number, fertilizerId: number, consumedSec: number, lands: object[]}>}>} 成功次数与本次减秒明细
  */
 async function fertilize(landIds, fertilizerId = NORMAL_FERTILIZER_ID) {
   let successCount = 0;
+  const reductions = [];
   for (const landId of landIds) {
     try {
       const payload = types.FertilizeRequest.encode(types.FertilizeRequest.create({
         land_ids: [toLong(landId)],
         fertilizer_id: toLong(fertilizerId)
       })).finish();
-      await sendMsgAsync('gamepb.plantpb.PlantService', 'Fertilize', payload);
+      const { body } = await sendMsgAsync('gamepb.plantpb.PlantService', 'Fertilize', payload);
       successCount++;
+
+      try {
+        const reply = types.FertilizeReply.decode(body);
+        reductions.push({
+          landId: toNum(landId),
+          fertilizerId: toNum(fertilizerId),
+          // consumed 是 corepb.Item：count = 本次消耗的肥料秒数
+          consumedSec: Math.max(0, toNum(reply && reply.fertilizer_use && reply.fertilizer_use.consumed && reply.fertilizer_use.consumed.count)),
+          lands: (reply && reply.land) || []
+        });
+      } catch { }
     } catch {
       break;
     }
@@ -99,7 +117,7 @@ async function fertilize(landIds, fertilizerId = NORMAL_FERTILIZER_ID) {
       await sleep(200, 600);
     }
   }
-  return successCount;
+  return { count: successCount, reductions };
 }
 
 /** 铲除植物 */

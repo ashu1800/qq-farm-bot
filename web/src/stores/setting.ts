@@ -34,6 +34,8 @@ export interface AutomationConfig {
   share_reward_share?: boolean
   share_reward_daily?: boolean
   share_reward_milestones?: boolean
+  milk_tea_daily?: boolean
+  milk_tea_milestones?: boolean
   pet_diary_adopt?: boolean
   pet_diary_feed?: boolean
   pet_diary_draw?: boolean

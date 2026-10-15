@@ -9,12 +9,15 @@ function createAutoCodeRefreshService(deps) {
     resolveWorkerControls,
     log,
     addAccountLog,
+    napcatLogin = require('../services/napcat-login'),
   } = deps;
 
   const scheduler = createScheduler('auto_code_refresh');
   const recoveryState = new Map();
   const MAX_DAILY_RECOVERIES = 8;
   const MAX_CONSECUTIVE_FAILURES = 3;
+  // 刷新会切换 NapCat 的 QQ 会话，跨账号必须串行执行。
+  let refreshQueue = Promise.resolve();
 
   function getRecoveryState(accountId) {
     const date = new Date().toISOString().slice(0, 10);
@@ -55,6 +58,15 @@ function createAutoCodeRefreshService(deps) {
   }
 
   async function requestFarmCode(account) {
+    const platform = String(account && account.platform || '').toLowerCase();
+    // QQ 扫码账号：通过 NapCat 中保留的 QQ 会话快速登录并重新铸取 Code。
+    if (platform !== 'wx') {
+      const uin = String(account && (account.uin || account.qq) || '').trim();
+      if (!uin) throw new Error('账号缺少 QQ 号，无法自动刷新 Code');
+      const result = await napcatLogin.refreshCodeForUin(uin);
+      return String(result && result.code || '');
+    }
+
     const wxid = String(account && account.wxid || '').trim();
     if (!wxid) throw new Error('账号缺少 wxid，无法自动刷新 Code');
 
@@ -68,7 +80,7 @@ function createAutoCodeRefreshService(deps) {
     throw new Error(local.Message || '进程内获取 Code 失败');
   }
 
-  async function refreshAccountCode(accountId, reason = 'timer') {
+  async function runRefreshAccountCode(accountId, reason = 'timer') {
     const account = findAccount(accountId);
     if (!account) return false;
 
@@ -109,6 +121,13 @@ function createAutoCodeRefreshService(deps) {
     }
   }
 
+  // 对外入口：跨账号串行，避免并发切换 NapCat 会话。
+  function refreshAccountCode(accountId, reason = 'timer') {
+    const run = refreshQueue.then(() => runRefreshAccountCode(accountId, reason), () => runRefreshAccountCode(accountId, reason));
+    refreshQueue = run.then(() => {}, () => {});
+    return run;
+  }
+
   function scheduleAccount(accountId) {
     const cfg = normalizeConfig(accountId);
     const taskName = getTaskName(accountId);
@@ -116,29 +135,34 @@ function createAutoCodeRefreshService(deps) {
     scheduler.clear(getKeepaliveTaskName(accountId));
 
     const account = findAccount(accountId);
-    // Code refresh and credential keepalive only apply to WeChat scan-login accounts.
-    // All accounts are passed through rescheduleAll(), so QQ accounts must exit quietly.
-    if (!account || account.platform !== 'wx') return;
+    if (!account) return;
 
-    if (!String(account.wxid || '').trim()) {
-      log('系统', '自动刷新 Code 未启动: 账号缺少 wxid', {
-        accountId: String(accountId),
-        accountName: account.name || '',
-      });
+    const platform = String(account.platform || '').toLowerCase();
+    const uin = String(account.uin || account.qq || '').trim();
+    if (platform === 'wx') {
+      if (!String(account.wxid || '').trim()) {
+        log('系统', '自动刷新 Code 未启动: 账号缺少 wxid', {
+          accountId: String(accountId),
+          accountName: account.name || '',
+        });
+        return;
+      }
+
+      if (account.loginBuffer && account.refreshtoken) {
+        scheduler.setIntervalTask(getKeepaliveTaskName(accountId), 30 * 60000, async () => {
+          const latest = findAccount(accountId);
+          if (!latest) return;
+          const result = await wxLoginAdapter.keepWxCredentialAlive(latest);
+          if (!result.Success) {
+            log('错误', `微信凭证保活失败: ${latest.name} - ${result.Message || '未知错误'}`, {
+              accountId: String(accountId), accountName: latest.name,
+            });
+          }
+        }, { preventOverlap: true });
+      }
+    } else if (!uin) {
+      // 历史 QQ 账号可能没有记录 QQ 号，无法自动续登；保持静默避免误导。
       return;
-    }
-
-    if (account.loginBuffer && account.refreshtoken) {
-      scheduler.setIntervalTask(getKeepaliveTaskName(accountId), 30 * 60000, async () => {
-        const latest = findAccount(accountId);
-        if (!latest) return;
-        const result = await wxLoginAdapter.keepWxCredentialAlive(latest);
-        if (!result.Success) {
-          log('错误', `微信凭证保活失败: ${latest.name} - ${result.Message || '未知错误'}`, {
-            accountId: String(accountId), accountName: latest.name,
-          });
-        }
-      }, { preventOverlap: true });
     }
 
     if (!cfg.enabled) return;
@@ -172,7 +196,10 @@ function createAutoCodeRefreshService(deps) {
     const cfg = normalizeConfig(accountId);
     if (!cfg.enabled) return false;
     const account = findAccount(accountId);
-    if (!account || !account.loginBuffer) return false;
+    if (!account) return false;
+    const platform = String(account.platform || '').toLowerCase();
+    if (platform === 'wx' && !account.loginBuffer) return false;
+    if (platform !== 'wx' && !String(account.uin || account.qq || '').trim()) return false;
     const recovery = getRecoveryState(accountId);
     if (recovery.attempts >= MAX_DAILY_RECOVERIES
       || recovery.failures >= MAX_CONSECUTIVE_FAILURES) {

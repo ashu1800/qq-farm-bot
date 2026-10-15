@@ -241,6 +241,8 @@ function createDataProvider(deps) {
         operateWishSign: (ref, action, chooseId) => callWorkerApi(resolveAccountId(ref), 'operateWishSign', action, chooseId),
         getShareRewardActivity: (ref) => callWorkerApi(resolveAccountId(ref), 'getShareRewardActivity'),
         operateShareReward: (ref, action) => callWorkerApi(resolveAccountId(ref), 'operateShareReward', action),
+        getMilkTeaActivity: (ref) => callWorkerApi(resolveAccountId(ref), 'getMilkTeaActivity'),
+        operateMilkTea: (ref, action, params) => callWorkerApi(resolveAccountId(ref), 'operateMilkTea', action, params || {}),
         getPetDiaryActivity: (ref) => callWorkerApi(resolveAccountId(ref), 'getPetDiaryActivity'),
         getPetDiary: (ref) => callWorkerApi(resolveAccountId(ref), 'getPetDiary'),
         operatePetDiary: (ref, action, params) => callWorkerApi(resolveAccountId(ref), 'operatePetDiary', action, params || {}),

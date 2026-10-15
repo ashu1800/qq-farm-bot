@@ -11,6 +11,7 @@ const {
   getPrioritizeGrowthTasks,
 } = require('../models/store');
 const { getPlantRankings } = require('./analytics');
+const { getFirstSeasonSeconds } = require('./plant-economy');
 const { getBagSeeds } = require('./warehouse');
 const { getShopInfo, buyGoods, getSeedShopId } = require('./farm-api');
 const { buildLandMap, getDisplayLandContext } = require('./farm-land-analyzer');
@@ -153,6 +154,14 @@ function selectMaximumNonOverlappingGroups(groups, limit) {
   return best;
 }
 
+/** 收益未知（果实不在物品表中）的作物不参与利润类策略，避免按 0 收益误选 */
+const PROFIT_STRATEGIES = new Set(['max_profit', 'max_fert_profit']);
+
+function isProfitableCandidate(rank, strategy) {
+  if (!PROFIT_STRATEGIES.has(strategy)) return true;
+  return !rank || rank.priceKnown !== false;
+}
+
 function getEstimatedLandClearAt(land, emptySet) {
   const landId = toNum(land?.id);
   if (emptySet.has(landId)) return 0;
@@ -170,7 +179,8 @@ function getEstimatedLandClearAt(land, emptySet) {
   const currentSeason = Math.max(1, toNum(plant.season) || 1);
   const totalSeasons = Math.max(currentSeason, toNum(plantConfig?.seasons) || currentSeason);
   const remainingSeasons = Math.max(0, totalSeasons - currentSeason);
-  const growSeconds = Math.max(0, toNum(getPlantGrowTime(toNum(plant.id))));
+  // 与 plant-economy 统一口径：多季作物每季时长按首季时长外推。
+  const growSeconds = Math.max(0, toNum(getFirstSeasonSeconds(toNum(plant.id))));
 
   return Math.max(getServerTimeSec(), matureAt) + remainingSeasons * growSeconds;
 }
@@ -753,6 +763,7 @@ async function findBestSeed(overrideStrategy, accountId = getCurrentAccountId())
       for (const rank of rankings) {
         const seedId = Number(rank && rank.seedId) || 0;
         if (seedId <= 0) continue;
+        if (!isProfitableCandidate(rank, strategy)) continue;
 
         const level = Number(rank && rank.level);
         if (Number.isFinite(level) && level > userState.level) continue;
@@ -834,6 +845,7 @@ async function findBestSeedFromLocal(overrideStrategy, accountId = getCurrentAcc
       for (const rank of rankings) {
         const seedId = Number(rank && rank.seedId) || 0;
         if (seedId <= 0) continue;
+        if (!isProfitableCandidate(rank, strategy)) continue;
         const level = Number(rank && rank.level);
         if (Number.isFinite(level) && level > userState.level) continue;
         const match = availableSeeds.find(s => s.seedId === seedId);

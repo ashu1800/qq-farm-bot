@@ -7,7 +7,7 @@ import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseSwitch from '@/components/ui/BaseSwitch.vue'
-import { CHARITY_FLOWER_ACTIVITY_WINDOW, isWithinActivityWindowMs, PET_DIARY_ACTIVITY_WINDOW, RAIN_POEM_ACTIVITY_WINDOW, SHARE_REWARD_ACTIVITY_WINDOW, WISH_SIGN_ACTIVITY_WINDOW } from '@/constants/activity-windows'
+import { CHARITY_FLOWER_ACTIVITY_WINDOW, isWithinActivityWindowMs, MILK_TEA_ACTIVITY_WINDOW, PET_DIARY_ACTIVITY_WINDOW, RAIN_POEM_ACTIVITY_WINDOW, SHARE_REWARD_ACTIVITY_WINDOW, WISH_SIGN_ACTIVITY_WINDOW } from '@/constants/activity-windows'
 
 type ModuleKey = 'planting' | 'fertilizer' | 'friends' | 'steal' | 'merchant' | 'activity'
 
@@ -41,6 +41,7 @@ const showCharityFlowerActivity = computed(() => isWithinActivityWindowMs(CHARIT
 const showPetDiaryActivity = computed(() => isWithinActivityWindowMs(PET_DIARY_ACTIVITY_WINDOW, nowMs.value))
 const showWishSignActivity = computed(() => isWithinActivityWindowMs(WISH_SIGN_ACTIVITY_WINDOW, nowMs.value))
 const showShareRewardActivity = computed(() => isWithinActivityWindowMs(SHARE_REWARD_ACTIVITY_WINDOW, nowMs.value))
+const showMilkTeaActivity = computed(() => isWithinActivityWindowMs(MILK_TEA_ACTIVITY_WINDOW, nowMs.value))
 
 const moduleInfo: Record<ModuleKey, { title: string, description: string, icon: string, image: string, tone: string }> = {
   planting: { title: '种植与收获', description: '选种、收获、出售和巡田节奏', icon: 'i-carbon-sprout', image: '/game-config/module_icons/planting.png', tone: 'emerald' },
@@ -67,6 +68,7 @@ const activityKeys = computed(() => [
     : []),
   ...(showWishSignActivity.value ? ['wish_sign_draw', 'wish_sign_claim'] : []),
   ...(showShareRewardActivity.value ? ['share_reward_share', 'share_reward_daily', 'share_reward_milestones'] : []),
+  ...(showMilkTeaActivity.value ? ['milk_tea_daily', 'milk_tea_milestones'] : []),
 ])
 const activityEnabledCount = computed(() => activityKeys.value.filter(key => automation.value.automation[key]).length)
 const starFestivalEnabled = computed(() => ['star_passport_claim', 'star_solar_claim', 'star_record_claim'].some(key => automation.value.automation[key]))
@@ -78,6 +80,7 @@ const charityFlowerActivityEnabled = computed(() => ['charity_flower_share_claim
 const petDiaryActivityEnabled = computed(() => ['pet_diary_adopt', 'pet_diary_feed', 'pet_diary_draw', 'pet_diary_story_claim', 'pet_diary_seed_claim', 'pet_diary_solar_claim', 'pet_diary_treasure_open', 'pet_diary_compensation_claim', 'pet_diary_charm_equip', 'pet_diary_battle'].some(key => automation.value.automation[key]))
 const wishSignActivityEnabled = computed(() => ['wish_sign_draw', 'wish_sign_claim'].some(key => automation.value.automation[key]))
 const shareRewardActivityEnabled = computed(() => ['share_reward_share', 'share_reward_daily', 'share_reward_milestones'].some(key => automation.value.automation[key]))
+const milkTeaActivityEnabled = computed(() => ['milk_tea_daily', 'milk_tea_milestones'].some(key => automation.value.automation[key]))
 
 function intervalTag(min: number, max: number) {
   return `${min}-${max} 秒`
@@ -144,6 +147,7 @@ function summaryTags(key: ModuleKey) {
     showPetDiaryActivity.value && petDiaryActivityEnabled.value && '萌宠成长日记',
     showWishSignActivity.value && wishSignActivityEnabled.value && '秋祈良愿',
     showShareRewardActivity.value && shareRewardActivityEnabled.value && '快乐不独享',
+    showMilkTeaActivity.value && milkTeaActivityEnabled.value && '奶茶热销中',
     activityEnabledCount.value === 0 && !starFestivalEnabled.value
     && (!SHOW_QIXI_ACTIVITY || !qixiActivityEnabled.value) && '未开启活动',
   ].filter(Boolean)
@@ -666,6 +670,20 @@ watch(() => props.currentAccountId, loadQixiFriends)
                   <BaseSwitch v-model="automation.automation.share_reward_share" label="自动分享" />
                   <BaseSwitch v-model="automation.automation.share_reward_daily" label="自动领取每日快乐值" />
                   <BaseSwitch v-model="automation.automation.share_reward_milestones" label="自动领取档位奖励" />
+                </div>
+              </section>
+
+              <section v-if="showMilkTeaActivity" class="border border-amber-100 rounded-lg p-4 space-y-3 dark:border-amber-900/40">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <div class="text-sm text-gray-700 font-medium dark:text-gray-300">奶茶热销中</div>
+                    <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">自动领取每日奶茶收益和已达成的营业额档位奖励；种子购买与奖励兑换请到活动页手工操作。奶茶店主玩法（收银台/升级/雇佣）协议待取证，暂不纳管。</div>
+                  </div>
+                  <span class="rounded-full bg-amber-100 px-2 py-1 text-xs text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">2026-10-15 10:00 — 2026-11-16 23:59</span>
+                </div>
+                <div class="grid gap-3 sm:grid-cols-2">
+                  <BaseSwitch v-model="automation.automation.milk_tea_daily" label="自动领取每日奶茶收益" />
+                  <BaseSwitch v-model="automation.automation.milk_tea_milestones" label="自动领取营业额档位" />
                 </div>
               </section>
 

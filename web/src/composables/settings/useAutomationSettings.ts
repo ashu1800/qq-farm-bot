@@ -45,6 +45,8 @@ const defaultAutomation = {
   share_reward_share: false,
   share_reward_daily: false,
   share_reward_milestones: false,
+  milk_tea_daily: false,
+  milk_tea_milestones: false,
   pet_diary_adopt: false,
   pet_diary_feed: false,
   pet_diary_draw: false,

@@ -73,18 +73,31 @@ const strategies = [
   },
 ]
 
+// 利润类策略需要收益来源明确，果实不在物品表（priceKnown=false）的作物不参与推荐。
+const PROFIT_STRATEGY_KEYS = ['max_profit', 'max_fert_profit']
+
+function toMetricNumber(value: any) {
+  if (value === null || value === undefined || value === '')
+    return Number.NaN
+  const num = Number(value)
+  return Number.isFinite(num) ? num : Number.NaN
+}
+
 function getStrategyBestPlant(strategyKey: string) {
   const strategy = strategies.find(s => s.key === strategyKey)
   if (!strategy)
     return null
 
   const metric = strategy.metric
-  const filtered = list.value.filter((item) => {
+  let filtered = list.value.filter((item) => {
     const level = item.level
     if (level === null || level === undefined)
       return true
     return Number(level) <= strategyLevel.value
   })
+
+  if (PROFIT_STRATEGY_KEYS.includes(strategyKey))
+    filtered = filtered.filter(item => item?.priceKnown !== false)
 
   if (filtered.length === 0)
     return null
@@ -98,8 +111,8 @@ function getStrategyBestPlant(strategyKey: string) {
   }
 
   return [...filtered].sort((a, b) => {
-    const av = Number(a[metric])
-    const bv = Number(b[metric])
+    const av = toMetricNumber(a[metric])
+    const bv = toMetricNumber(b[metric])
     if (!Number.isFinite(av) && !Number.isFinite(bv))
       return 0
     if (!Number.isFinite(av))
@@ -324,6 +337,30 @@ function formatGrowTime(seconds: any) {
   const mins = Math.floor((s % 3600) / 60)
   return mins > 0 ? `${hours}时${mins}分` : `${hours}时`
 }
+
+const SEASON_ASSUMED_TITLE = '多季时长按首季估算，待实测校准'
+const FERT_ASSUMED_TITLE = '化肥效果尚未实测校准'
+
+// 多季时长按首季估算，尚未用实测数据校准。
+function isSeasonSecondsAssumed(item: any) {
+  return item?.seasonSecondsSource === 'assumed'
+}
+
+// 普通化肥的缩短时长仍是假设值，尚未实测校准。
+function isFertilizerAssumed(item: any) {
+  return item?.fert?.normal?.reduceSource === 'assumed'
+}
+
+// 利润/金币类指标：收益来源未知时显示“未知”，不显示 0、负数或占位符。
+function formatProfitMetric(item: any, value: any) {
+  if (item?.priceKnown === false)
+    return '未知'
+  if (value === null || value === undefined || value === '')
+    return '未知'
+  if (!Number.isFinite(Number(value)))
+    return '未知'
+  return String(value)
+}
 </script>
 
 <template>
@@ -458,9 +495,12 @@ function formatGrowTime(seconds: any) {
               </div>
 
               <div class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                <div class="flex flex-col">
+                <div class="flex flex-col" :title="isSeasonSecondsAssumed(item) ? SEASON_ASSUMED_TITLE : ''">
                   <span class="text-xs text-gray-500">时间</span>
-                  <span class="text-gray-700 font-medium dark:text-gray-300">{{ formatGrowTime(item.growTime) }}</span>
+                  <span class="text-gray-700 font-medium dark:text-gray-300">
+                    {{ formatGrowTime(item.growTime) }}
+                    <span v-if="isSeasonSecondsAssumed(item)" class="ml-1 text-[10px] text-gray-400">估算</span>
+                  </span>
                 </div>
                 <div class="flex flex-col">
                   <span class="text-xs text-gray-500">经验/时</span>
@@ -468,15 +508,21 @@ function formatGrowTime(seconds: any) {
                 </div>
                 <div class="flex flex-col">
                   <span class="text-xs text-gray-500">净利润/时</span>
-                  <span class="text-amber-500 font-bold">{{ item.profitPerHour ?? '-' }}</span>
+                  <span class="text-amber-500 font-bold">{{ formatProfitMetric(item, item.profitPerHour) }}</span>
                 </div>
-                <div class="flex flex-col">
+                <div class="flex flex-col" :title="isFertilizerAssumed(item) ? FERT_ASSUMED_TITLE : ''">
                   <span class="text-xs text-gray-500">普肥经验/时</span>
-                  <span class="text-blue-600 font-bold dark:text-blue-400">{{ item.normalFertilizerExpPerHour ?? '-' }}</span>
+                  <span class="text-blue-600 font-bold dark:text-blue-400">
+                    {{ item.normalFertilizerExpPerHour ?? '-' }}
+                    <span v-if="isFertilizerAssumed(item)" class="ml-1 text-[10px] text-gray-400">估算</span>
+                  </span>
                 </div>
-                <div class="flex flex-col">
+                <div class="flex flex-col" :title="isFertilizerAssumed(item) ? FERT_ASSUMED_TITLE : ''">
                   <span class="text-xs text-gray-500">普肥利润/时</span>
-                  <span class="text-green-500 font-bold">{{ item.normalFertilizerProfitPerHour ?? '-' }}</span>
+                  <span class="text-green-500 font-bold">
+                    {{ formatProfitMetric(item, item.normalFertilizerProfitPerHour) }}
+                    <span v-if="isFertilizerAssumed(item)" class="ml-1 text-[10px] text-gray-400">估算</span>
+                  </span>
                 </div>
               </div>
 
@@ -548,9 +594,10 @@ function formatGrowTime(seconds: any) {
                         </div>
                       </div>
                     </td>
-                    <td class="px-4 py-2 text-gray-600 dark:text-gray-300">
+                    <td class="px-4 py-2 text-gray-600 dark:text-gray-300" :title="isSeasonSecondsAssumed(item) ? SEASON_ASSUMED_TITLE : ''">
                       <div class="font-medium">
                         {{ formatGrowTime(item.growTime) }}
+                        <span v-if="isSeasonSecondsAssumed(item)" class="ml-1 text-[10px] text-gray-400">估算</span>
                       </div>
                       <div class="text-xs text-gray-400">
                         {{ item.seasons }}季
@@ -561,19 +608,21 @@ function formatGrowTime(seconds: any) {
                         {{ item.expPerHour }}
                       </div>
                     </td>
-                    <td class="px-4 py-2 text-right">
+                    <td class="px-4 py-2 text-right" :title="isFertilizerAssumed(item) ? FERT_ASSUMED_TITLE : ''">
                       <div class="text-blue-600 font-bold dark:text-blue-400">
                         {{ item.normalFertilizerExpPerHour ?? '-' }}
+                        <span v-if="isFertilizerAssumed(item)" class="ml-1 text-[10px] text-gray-400">估算</span>
                       </div>
                     </td>
                     <td class="px-4 py-2 text-right">
                       <div class="text-amber-500 font-bold">
-                        {{ item.profitPerHour ?? '-' }}
+                        {{ formatProfitMetric(item, item.profitPerHour) }}
                       </div>
                     </td>
-                    <td class="px-4 py-2 text-right">
+                    <td class="px-4 py-2 text-right" :title="isFertilizerAssumed(item) ? FERT_ASSUMED_TITLE : ''">
                       <div class="text-green-500 font-bold">
-                        {{ item.normalFertilizerProfitPerHour ?? '-' }}
+                        {{ formatProfitMetric(item, item.normalFertilizerProfitPerHour) }}
+                        <span v-if="isFertilizerAssumed(item)" class="ml-1 text-[10px] text-gray-400">估算</span>
                       </div>
                     </td>
                     <td class="px-4 py-2 text-center">

@@ -64,6 +64,17 @@ const SHARE_REWARD_ACTIVITY_ID = 2026092501;
 const SHARE_REWARD_ACTIVITY_UID = 'HappySharePanel';
 const SHARE_REWARD_START_TIME = 1790179200;
 const SHARE_REWARD_END_TIME = 1791820799;
+// 奶茶热销中（2026-10-15 ~ 2026-11-16）。ID/时间/玩法体取自 2026-10-15 GetGroup 在线取证，
+// 详见 core/docs/milk-tea-protocol.md。2026110102 为通用 exchange_shop、2026110104 为通用
+// share_reward（与快乐不独享同构）；2026110103 奶茶店主玩法为定制体，本地无字段，仅展示。
+const MILK_TEA_GROUP_ID = 2026110100;
+const MILK_TEA_ACTIVITY_ID = 2026110100;
+const MILK_TEA_ACTIVITY_UID = 'MilkTeaActivity';
+const MILK_TEA_SUB_ACTIVITY_IDS = [2026110101, 2026110102, 2026110103, 2026110104];
+const MILK_TEA_SHOP_ACTIVITY_ID = 2026110102;
+const MILK_TEA_SHARE_ACTIVITY_ID = 2026110104;
+const MILK_TEA_START_TIME = 1792029600;
+const MILK_TEA_END_TIME = 1794844799;
 const WISH_SIGN_CHOICES = ['财运', '感情', '前程', '生活', '农耕', '人际'];
 // 萌宠日记（S3 比熊萌宠主题赛季）。协议字段与文案来自 2026-09-10 官方客户端
 // List/Operate 明文响应，详见 core/docs/pet-diary-protocol-recovery.md。
@@ -988,6 +999,133 @@ async function getShareRewardActivity() {
   const node = findActivityNodeById([group?.group], SHARE_REWARD_ACTIVITY_ID);
   if (!node?.share_reward?.summary) throw new Error('快乐不独享活动数据未下发');
   return normalizeShareRewardActivity(node);
+}
+
+function isMilkTeaActive(nowSeconds = Math.floor(Date.now() / 1000)) {
+  return nowSeconds >= MILK_TEA_START_TIME && nowSeconds <= MILK_TEA_END_TIME;
+}
+
+// 玩法体未取证前的通用归一化：输出通用字段、已知通用体特征与未知字段名清单（供取证）。
+function normalizeMilkTeaNode(node) {
+  const raw = node?.activity || {};
+  const payloadText = String(raw.payload || '').trim();
+  let payload = null;
+  if (payloadText) {
+    try { payload = JSON.parse(payloadText); } catch { payload = { text: payloadText.slice(0, 2000) }; }
+  }
+  const knownKeys = new Set(['activity', 'children', 'random_shop', 'exchange_shop', 'draw_info', 'star_record', 'share_reward']);
+  return {
+    id: toNum(raw.id),
+    title: String(raw.title || ''),
+    startTime: toNum(raw.start_time),
+    endTime: toNum(raw.end_time),
+    payload,
+    features: {
+      randomShop: !!node?.random_shop,
+      exchangeShop: !!node?.exchange_shop,
+      draw: !!node?.draw_info,
+      starRecord: !!node?.star_record,
+      shareReward: !!node?.share_reward,
+    },
+    unknownFieldNames: Object.keys(node || {}).filter(key => !knownKeys.has(key)),
+  };
+}
+
+let milkTeaEvidenceLogged = false;
+
+function normalizeMilkTeaShopItems(items) {
+  return ((items) || []).map(item => ({
+    slotId: toNum(item?.id),
+    itemId: toNum(item?.item?.id),
+    itemCount: toNum(item?.item?.count) || 1,
+    costItemId: toNum(item?.cost?.id),
+    costItemCount: toNum(item?.cost?.count),
+    status: toNum(item?.status),
+    name: String(item?.name || ''),
+  }));
+}
+
+function normalizeMilkTeaShareRewards(summary) {
+  return {
+    dailyClaimLimit: toNum(summary?.daily?.claim_limit),
+    poolClaimLimit: toNum(summary?.my_pool?.claim_limit),
+    dailyReward: toNum(summary?.daily_reward),
+    firstShareReward: toNum(summary?.first_share_reward),
+    unclaimed: {
+      daily: !!summary?.red_dots?.daily,
+      firstShare: !!summary?.red_dots?.first_share,
+    },
+    milestones: (summary?.milestones || []).map(tier => ({
+      tierId: toNum(tier.tier_id),
+      threshold: toNum(tier.threshold),
+      state: toNum(tier.state),
+      rewards: (tier.rewards || []).map(normalizeCoreItem),
+    })),
+  };
+}
+
+async function getMilkTeaActivity() {
+  const group = await getActivityGroup(MILK_TEA_GROUP_ID, MILK_TEA_ACTIVITY_UID);
+  const findNode = id => findActivityNodeById([group?.group], id);
+  const shopItems = normalizeMilkTeaShopItems(findNode(MILK_TEA_SHOP_ACTIVITY_ID)?.exchange_shop?.items);
+  const shareRewards = normalizeMilkTeaShareRewards(findNode(MILK_TEA_SHARE_ACTIVITY_ID)?.share_reward?.summary);
+  const infoNodes = [2026110101, 2026110103]
+    .map(id => findNode(id))
+    .filter(Boolean)
+    .map(normalizeMilkTeaNode);
+  if (!shopItems.length && !infoNodes.length) throw new Error('奶茶热销中活动数据未下发');
+  if (!milkTeaEvidenceLogged) {
+    activityLogger.info(`[奶茶热销中] GetGroup 取证 payload=${JSON.stringify(group?.group || {}).slice(0, 60000)}`);
+    milkTeaEvidenceLogged = true;
+  }
+  return {
+    title: '奶茶热销中', activityId: MILK_TEA_GROUP_ID,
+    startTime: MILK_TEA_START_TIME, endTime: MILK_TEA_END_TIME,
+    active: isMilkTeaActive(),
+    shop: { items: shopItems },
+    shareRewards,
+    infoNodes,
+  };
+}
+
+// 兑换走通用 exchange_shop（cmd 1，证据同雨落成诗/星砂商店）；每日/档位领取复用
+// 快乐不独享的 cmd 73/70（2026110104 的 share_reward 体与其逐字段同构，属强证据复用）。
+// 2026110103 奶茶店主玩法为定制体，无证据命令，不做操作。
+async function operateMilkTea(action, params = {}) {
+  if (!isMilkTeaActive()) throw new Error('奶茶热销中未开始或已结束');
+  if (action === 'exchange') {
+    const slotId = Number(params.slotId) || 0;
+    const count = Math.max(1, Math.min(99, Math.floor(Number(params.count) || 1)));
+    if (!slotId) throw new Error('缺少有效的兑换槽位');
+    const before = await getMilkTeaActivity();
+    const slot = before.shop.items.find(item => item.slotId === slotId);
+    if (!slot) throw new Error(`兑换商店未找到槽位: ${slotId}`);
+    const reply = await operateActivityReply(MILK_TEA_SHOP_ACTIVITY_ID, 1, { exchangeShopOperate: { id: slotId, count } });
+    return {
+      ok: true, slotId, count,
+      rewards: (reply?.exchange_shop_operate?.rewards || []).map(normalizeCoreItem),
+    };
+  }
+  if (action === 'daily') {
+    const before = await getMilkTeaActivity();
+    if (!before.shareRewards.unclaimed.daily) throw new Error('今日奶茶收益没有待领取奖励');
+    const reply = await operateActivityReply(MILK_TEA_SHARE_ACTIVITY_ID, 73);
+    return {
+      ok: true,
+      rewards: (reply?.share_reward_claim_daily?.rewards || []).map(normalizeCoreItem),
+    };
+  }
+  if (action === 'milestones') {
+    const before = await getMilkTeaActivity();
+    if (!before.shareRewards.milestones.some(tier => tier.state === 2)) throw new Error('没有可领取的营业额档位');
+    const reply = await operateActivityReply(MILK_TEA_SHARE_ACTIVITY_ID, 70);
+    return {
+      ok: true,
+      claimedTierIds: (reply?.share_reward_claim_milestones?.claimed_tier_ids || []).map(toNum),
+      rewards: (reply?.share_reward_claim_milestones?.rewards || []).map(normalizeCoreItem),
+    };
+  }
+  throw new Error('不支持的奶茶热销中操作');
 }
 
 async function operateWishSign(action, chooseId) {
@@ -3358,14 +3496,26 @@ module.exports = {
   CHARITY_FLOWER_ACTIVITY_ID,
   WISH_SIGN_ACTIVITY_ID,
   SHARE_REWARD_ACTIVITY_ID,
+  MILK_TEA_ACTIVITY_ID,
+  MILK_TEA_SUB_ACTIVITY_IDS,
+  MILK_TEA_SHOP_ACTIVITY_ID,
+  MILK_TEA_SHARE_ACTIVITY_ID,
+  MILK_TEA_START_TIME,
+  MILK_TEA_END_TIME,
   isWishSignActive,
   isShareRewardActive,
+  isMilkTeaActive,
   normalizeWishSignActivity,
   normalizeShareRewardActivity,
+  normalizeMilkTeaNode,
+  normalizeMilkTeaShopItems,
+  normalizeMilkTeaShareRewards,
   getWishSignActivity,
   getShareRewardActivity,
+  getMilkTeaActivity,
   operateWishSign,
   operateShareReward,
+  operateMilkTea,
   PET_DIARY_ACTIVITY_ID,
   PET_DIARY_GIFT_ACTIVITY_ID,
   PET_DIARY_SHOP_ACTIVITY_ID,

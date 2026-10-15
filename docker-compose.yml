@@ -31,7 +31,9 @@ services:
       # CAPTURE_ADVERTISE_IPS=192.168.1.100,100.64.0.2
 
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3007/api/status"]
+      # /api/status 未登录返回 401，且容器内 busybox wget 会把 localhost 解析为
+      # IPv6 ::1 导致连接被拒；改用免鉴权的 /api/health + 127.0.0.1。
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3007/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
