@@ -3,6 +3,7 @@ const { getPlantName, getPlantExp, getPlantById, getPlantGrowTime, getPlantGrowP
 const { toNum, toTimeSec, getServerTimeSec, logWarn } = require('../utils/utils');
 const { getAllLands } = require('./farm-api');
 const { recordSeasonObservation } = require('./plant-model');
+const { publishLandSnapshot } = require('./exp-forecast');
 
 const GOLDEN_BUG_ITEM_ID = 301101;
 const GOLDEN_BUG_SOCIAL_TYPE = 2;
@@ -351,6 +352,9 @@ function analyzeLands(lands, debug = false) {
   // 巡田顺带采集季时长实测样本（带首季自校验，见 observePlantModel）
   observePlantModel(lands, landMap);
 
+  // 巡田顺带刷新「经验产出预测」用的土地快照（不产生额外请求）
+  publishLandSnapshot(lands, { serverTimeSec: serverTime });
+
   for (const land of lands) {
     const landId = toNum(land.id);
 
@@ -567,6 +571,9 @@ async function getLandsDetail() {
     const serverTime = getServerTimeSec();
     const details = [];
     const landMap = buildLandMap(landsReply.lands);
+
+    // 面板直接查看土地时同样刷新预测快照
+    publishLandSnapshot(landsReply.lands, { serverTimeSec: serverTime });
 
     for (const land of landsReply.lands) {
       const landId = toNum(land.id);

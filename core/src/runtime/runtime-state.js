@@ -197,6 +197,8 @@ function createRuntimeState(deps) {
             levelProgress: { current: 0, needed: 0, maxed: false },
             // 离线/未启动时没有效率数据，前端显示「数据积累中」。
             expRate: null,
+            // 种植结构口径的经验产出预测（效率与升级预估），离线时为 null。
+            expForecast: null,
             configRevision,
             accountId: aid
         };

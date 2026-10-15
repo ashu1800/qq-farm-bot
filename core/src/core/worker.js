@@ -7,6 +7,7 @@ const {
     getAutomation,
     getFriendBlacklist,
     getConfigSnapshot,
+    getPlantingStrategy,
     applyConfigSnapshot
 } = require('../models/store');
 const {
@@ -2269,6 +2270,30 @@ function syncStatus() {
     stats.automation = getAutomation();
     stats.levelProgress = levelProgress;
     stats.configRevision = appliedConfigRevision;
+
+    // 种植结构口径的经验产出预测（效率与升级预估），数据来自巡田快照
+    try {
+        const { getLandSnapshot, buildExpForecast, resolveExpectedCrop } = require('../services/exp-forecast');
+        const automation = stats.automation || {};
+        const remainingExp = levelProgress && !levelProgress.maxed
+            ? Math.max(0, Number(levelProgress.needed || 0) - Number(levelProgress.current || 0))
+            : 0;
+        const forecast = buildExpForecast({
+            snapshot: getLandSnapshot(),
+            remainingExp,
+            levelMaxed: !!(levelProgress && levelProgress.maxed),
+            // 自动巡田关闭时不会补种，只报告缺口
+            autoReplant: automation.farm !== false,
+            expectedCrop: resolveExpectedCrop(getPlantingStrategy())
+        });
+        forecast.measuredExpPerHour = stats.expRate ? stats.expRate.expPerHour : null;
+        stats.expForecast = forecast;
+    } catch (err) {
+        stats.expForecast = null;
+        log('系统', `经验产出预测失败: ${err && err.message ? err.message : err}`, {
+            module: 'system', event: '经验预测', result: 'error'
+        });
+    }
 
     const stableStats = { ...stats };
     delete stableStats.nextChecks;

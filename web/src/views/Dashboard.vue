@@ -147,59 +147,102 @@ const displayName = computed(() => {
   return '未命名'
 })
 
-// 实时效率与升级预估均改为消费后端下发的 expRate，前端不再用 sessionExpGained / uptime 自行推算。
+// 效率与升级预估都消费后端下发的 expForecast（种植结构口径），前端不做推算。
+// expRate 是上一轮的实测滑动窗口速率，降级为悬停提示里的参考值。
+const expForecast = computed(() => status.value?.expForecast || null)
 const expRateInfo = computed(() => status.value?.expRate || null)
 
+/** 经验数量：大数字加千分位 */
+function formatExpCount(value: any) {
+  const num = Number(value)
+  if (!Number.isFinite(num))
+    return '0'
+  return Math.round(num).toLocaleString('zh-CN')
+}
+
+/** 把秒数说成人话，用于悬停提示 */
+function formatForecastDuration(seconds: any) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0))
+  if (total < 60)
+    return `${total} 秒`
+  if (total < 3600)
+    return `${Math.round(total / 60)} 分钟`
+  if (total < 86400)
+    return `${(total / 3600).toFixed(total % 3600 === 0 ? 0 : 1)} 小时`
+  return `${(total / 86400).toFixed(1)} 天`
+}
+
 const expRate = computed(() => {
-  const info = expRateInfo.value
-  // 样本还在积累时不能显示 0/小时，否则会被误读成“在线但没有收益”。
-  if (!info || info.ready === false)
+  const forecast = expForecast.value
+  // 没有土地数据时不能显示 0/小时，否则会被误读成“在线但没有收益”。
+  if (!forecast || forecast.ready !== true)
     return '--'
-  const rate = Number(info.expPerHour)
-  if (!Number.isFinite(rate) || rate <= 0)
-    return '0/小时'
+  const rate = Number(forecast.expPerHour)
+  if (!Number.isFinite(rate))
+    return '--'
   return `${Math.round(rate).toLocaleString('zh-CN')}/小时`
 })
 
 const expRateHint = computed(() => {
-  const info = expRateInfo.value
-  if (!info)
-    return ''
+  const forecast = expForecast.value
+  const parts: string[] = []
 
-  const windowSeconds = Number(info.windowSeconds) > 0 ? Number(info.windowSeconds) : 3600
-  const windowText = windowSeconds < 3600
-    ? `近 ${Math.max(1, Math.round(windowSeconds / 60))} 分钟在线观测`
-    : `近 ${Math.max(1, Math.round(windowSeconds / 3600))} 小时在线观测`
-  const parts = [windowText]
+  if (forecast && forecast.ready === true) {
+    parts.push(`按当前种植折算：已种 ${forecast.plantedLands}/${forecast.totalLands} 块`)
+    if (Number.isFinite(Number(forecast.nextHarvestInSec)) && Number.isFinite(Number(forecast.nextHarvestExp)))
+      parts.push(`首个收获 ${formatForecastDuration(forecast.nextHarvestInSec)}后 · ${formatExpCount(forecast.nextHarvestExp)} 经验`)
+    if (forecast.etaSource === 'replanted' && forecast.expectedCropName)
+      parts.push(`含收获后补种 ${forecast.expectedCropName} 的估算`)
+    if (Number(forecast.totalLands) > Number(forecast.plantedLands) && Number.isFinite(Number(forecast.expPerHourWithReplant)))
+      parts.push(`补满空地后约 ${Math.round(Number(forecast.expPerHourWithReplant)).toLocaleString('zh-CN')}/小时`)
+  }
+  else {
+    parts.push('暂无土地数据，无法按当前种植折算')
+  }
 
-  if (Number.isFinite(Number(info.sampleCount)))
-    parts.push(`${Number(info.sampleCount)} 个样本`)
-
-  if (info.source === 'extended') {
-    const extendedSeconds = windowSeconds > 3600 ? windowSeconds : 21600
-    parts.push(`样本不足，统计窗口放宽到 ${Math.max(1, Math.round(extendedSeconds / 3600))} 小时`)
+  const measured = expRateInfo.value
+  if (measured && measured.ready === true && Number.isFinite(Number(measured.expPerHour))) {
+    const windowSeconds = Number(measured.windowSeconds) > 0 ? Number(measured.windowSeconds) : 3600
+    const windowText = windowSeconds < 3600
+      ? `近 ${Math.max(1, Math.round(windowSeconds / 60))} 分钟`
+      : `近 ${Math.max(1, Math.round(windowSeconds / 3600))} 小时`
+    parts.push(`实测 ${Math.round(Number(measured.expPerHour)).toLocaleString('zh-CN')}/小时（${windowText}在线观测）`)
   }
 
   return parts.join(' · ')
 })
 
 const timeToLevel = computed(() => {
-  const info = expRateInfo.value
-  if (!info || info.ready === false)
-    return '数据积累中'
-  if (status.value?.levelProgress?.maxed === true)
+  const forecast = expForecast.value
+  if (!forecast)
+    return ''
+
+  if (status.value?.levelProgress?.maxed === true || forecast.etaSource === 'maxed')
     return '已满级'
 
-  const etaSeconds = info.etaSeconds
-  if (etaSeconds === null || etaSeconds === undefined)
-    return ''
-  if (info.etaBeyond === true)
-    return '超过 30 天'
+  if (forecast.stale === true) {
+    const ageSec = Number(forecast.snapshotAgeSec)
+    if (Number.isFinite(ageSec) && ageSec > 0)
+      return `土地数据 ${formatForecastDuration(ageSec)}未刷新`
+    return '等待土地数据'
+  }
 
-  const seconds = Number(etaSeconds)
-  if (!Number.isFinite(seconds) || seconds <= 0)
+  if (forecast.etaSource === 'insufficient') {
+    const missing = Number(forecast.missingExp)
+    return Number.isFinite(missing) && missing > 0
+      ? `当前种植不足以升级（还差 ${formatExpCount(missing)}）`
+      : '当前种植不足以升级'
+  }
+
+  if (forecast.etaBeyond === true)
+    return '超过 1 年'
+
+  const seconds = Number(forecast.etaSeconds)
+  if (!Number.isFinite(seconds) || seconds < 0)
     return ''
 
+  if (seconds < 60)
+    return '即将升级'
   if (seconds < 3600)
     return `约 ${Math.max(1, Math.ceil(seconds / 60))} 分钟后升级`
   if (seconds < 86400)

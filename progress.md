@@ -136,10 +136,18 @@
 
 ### 改了什么
 
-- 新增 `core/src/services/exp-rate.js`：每账号的经验采样（状态同步 + 经验变化通知）、
-  在线活跃滑动窗口速率与升级预估。有效区间 = 相邻样本两端都在线、间隔 ≤ 5 分钟、
-  经验与等级均不倒退；先看最近 1 小时，有效观测不足 10 分钟或样本对不足 3 个时放宽到
-  6 小时，仍不足则输出 `ready: false`。
+- 新增 `core/src/services/exp-forecast.js`（**概览页效率与升级预估的主口径**）：
+  - 效率 = Σ(已种地块「该作物每季经验 ÷ 该作物整季时长」) × 3600；空地不摊薄，另出
+    `expPerHourWithReplant` 与已种/总地块覆盖率。
+  - 升级预估 = 把各地块收获事件按时间排队、累加经验，首次达到本级剩余经验的时刻；
+    已种作物一轮不足时按「补种同作物 / 空地补种策略最优作物」继续外推
+    （`etaSource: planted | replanted | insufficient | maxed`）。
+  - 土地快照由巡田（`analyzeLands`）与土地接口（`getLandsDetail`）写入进程内缓存，
+    不产生额外网关请求；超过 10 分钟未更新标记 `stale` 并停用 ETA。
+  - 不建模土地 buff / 变异 / 被偷带来的经验差异，属保守下界。
+- 新增 `core/src/services/exp-rate.js`：实测口径（效率数字的悬停参考值）：每账号经验采样
+  （状态同步 + 经验变化通知）、在线活跃滑动窗口速率。有效区间 = 相邻样本两端都在线、
+  间隔 ≤ 5 分钟、经验与等级均不倒退；先看最近 1 小时，观测不足时放宽到 6 小时。
 - 新增 `core/src/services/plant-economy.js`：单株时长/收益/效率的唯一口径来源，
   `analytics.js` 只负责排序，`planting-service.js` 的清空时间估算与
   `gameConfig.getSeedHarvestInfo` 的果实定价都改走这里。
@@ -151,13 +159,15 @@
   通过后才采信第 2 季及以后；带 `planting_time_reduction`、用过化肥、被催熟的地块跳过）；
   `farm-fertilizer`/`farm-api.fertilize()` 用 `FertilizeReply.fertilizer_use.consumed`
   与地块前后剩余成熟时间实测化肥减秒（`fertilize()` 返回值改为 `{ count, reductions }`）。
-- 前端只消费后端字段：`Dashboard.vue` 的效率/升级预估/满级分支，`Analytics.vue` 的
-  「未知」收益与「估算」角标、利润策略过滤 `priceKnown === false`。
+- 前端只消费后端字段：`Dashboard.vue` 的效率/升级预估/满级/数据过期分支，
+  `Analytics.vue` 的「未知」收益与「估算」角标、利润策略过滤 `priceKnown === false`。
 
 ### 口径与行为变化（用户可见）
 
-- 效率数值口径变了：剔除离线时段且不再拿进程运行时长做分母，数值通常比旧版小但真实；
-  worker 重启后不再归零，样本随 `data/stats/<accountId>.json` 的 `expSamples` 持久化。
+- 效率与升级预估改用**种植结构前瞻口径**（用户 2026-10-15 确认）：
+  10 块地各 1000 经验、8 小时成熟 → 1250/小时；经验 0、升级需 1000、10 块地共收 2000 → 预估 8 小时后。
+- 实测滑动窗口速率降级为悬停提示里的参考值，不再作为主指标；样本仍随
+  `data/stats/<accountId>.json` 的 `expSamples` 持久化。
 - 双季作物总时长从 `首季 × 1.5` 改为 `首季 × 2`（与 2x2 预留、种子商城的既有口径一致），
   双季作物每小时经验下降约 25%，**自动选种结果会变化**（用户已确认接受）。
 - 收益未知作物（果实不在 `ItemInfo` 中：80 种，其中 66 种为活动作物）不再输出 0 或负数利润，
@@ -166,9 +176,10 @@
 
 ### 验证
 
-- 新增测试：`core/test/exp-rate.test.js`（12）、`core/test/plant-economy.test.js`（11）、
+- 新增测试：`core/test/exp-forecast.test.js`（12，含用户给的两个基准用例）、
+  `core/test/exp-rate.test.js`（12）、`core/test/plant-economy.test.js`（11）、
   `core/test/analytics-ranking.test.js`（6）、`core/test/plant-model.test.js`（7）。
-- `cd core && node --test test/*.test.js`：435 通过，失败仍为改动前那 2 个已知红灯
+- `cd core && node --test test/*.test.js`：449 通过，失败仍为改动前那 2 个已知红灯
   （`crystal-animation.test.js` 本机无 `python3`、`pet-diary-automation.test.js`
   萌宠活动窗口已过期），未新增失败。
 - `cd web && npx vue-tsc -b --force && npx vite build` 通过。
