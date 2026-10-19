@@ -44,7 +44,8 @@ test('services share one classifier implementation', () => {
 
   const definitions = files.filter((file) => {
     const source = fs.readFileSync(file, 'utf8');
-    return /function isTransientNetworkError/.test(source);
+    // 兼容两种写法：函数声明或 const 箭头函数
+    return /function isTransientNetworkError|const isTransientNetworkError\s*=/.test(source);
   });
   assert.deepEqual(
     definitions.map(file => path.relative(root, file)).sort(),

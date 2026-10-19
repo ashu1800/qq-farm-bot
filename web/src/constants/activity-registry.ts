@@ -26,6 +26,7 @@ export type AdaptedActivityKey
     | 'wish-sign'
     | 'share-reward'
 
+/** 与 activity-windows.ts 的窗口字面量同构（updatedMs 为登记更新日期） */
 export interface ActivityWindowMs {
   startMs: number
   endMs: number
@@ -43,8 +44,6 @@ export interface ActivityRegistration {
   icon: string
   image: string
   imagePosition?: string
-  /** 活动登记更新日期（毫秒时间戳），列表按此倒序 */
-  updatedMs: number
   /** 已登记的活动时间窗；用于目录接口未返回时的兜底 */
   window: ActivityWindowMs
   /** 目录接口没有该活动时是否仍强制展示（当前只有进行中的奶茶活动需要） */
@@ -54,8 +53,8 @@ export interface ActivityRegistration {
 /**
  * 活动注册表。新增活动时在这里登记一行，并在 Activity.vue 提供对应面板分支。
  *
- * 注意：`updatedMs` 是「最近一次适配/更新该活动」的日期，不是活动开始时间。
- * 修改某个活动的展示或规则时同步更新它，列表排序会跟着变化。
+ * 列表排序使用活动窗口里登记的 `window.updatedMs`（更新日期），
+ * 这里不再维护第二份日期，避免两处写法不一致。
  */
 export const ACTIVITY_REGISTRATIONS: ActivityRegistration[] = [
   {
@@ -65,7 +64,6 @@ export const ACTIVITY_REGISTRATIONS: ActivityRegistration[] = [
     description: '经营奶茶小店、兑换商店与兼职工作',
     icon: 'i-carbon-cafe',
     image: '/activity/milk-tea/img_s4Main_bg.png',
-    updatedMs: Date.parse('2026-10-15T00:00:00+08:00'),
     window: MILK_TEA_ACTIVITY_WINDOW,
     alwaysListed: true,
   },
@@ -77,7 +75,6 @@ export const ACTIVITY_REGISTRATIONS: ActivityRegistration[] = [
     icon: 'i-fa-solid-paw',
     image: '/activity/pet-diary/scene-home-adult.webp?v=20260912',
     imagePosition: 'center 64%',
-    updatedMs: Date.parse('2026-09-10T00:00:00+08:00'),
     window: PET_DIARY_ACTIVITY_WINDOW,
   },
   {
@@ -87,7 +84,6 @@ export const ACTIVITY_REGISTRATIONS: ActivityRegistration[] = [
     description: '查看祈愿状态、祈愿池和每日奖励',
     icon: 'i-carbon-sun',
     image: '/activity/wish-sign/card-bg.svg',
-    updatedMs: Date.parse('2026-09-24T00:00:00+08:00'),
     window: WISH_SIGN_ACTIVITY_WINDOW,
   },
   {
@@ -97,7 +93,6 @@ export const ACTIVITY_REGISTRATIONS: ActivityRegistration[] = [
     description: '查看每日快乐值与档位进度',
     icon: 'i-carbon-share',
     image: '/activity/share-reward/card-bg.svg',
-    updatedMs: Date.parse('2026-09-24T00:00:00+08:00'),
     window: SHARE_REWARD_ACTIVITY_WINDOW,
   },
   {
@@ -107,7 +102,6 @@ export const ACTIVITY_REGISTRATIONS: ActivityRegistration[] = [
     description: '查看爱心、公益进度与奖励状态',
     icon: 'i-carbon-favorite',
     image: '',
-    updatedMs: Date.parse('2026-09-01T00:00:00+08:00'),
     window: CHARITY_FLOWER_ACTIVITY_WINDOW,
   },
   {
@@ -117,13 +111,12 @@ export const ACTIVITY_REGISTRATIONS: ActivityRegistration[] = [
     description: '查看天气、每日进度与气象研究',
     icon: 'i-carbon-rain-heavy',
     image: '/activity/rain-poem/day-rain-bg.jpg',
-    updatedMs: Date.parse('2026-08-26T00:00:00+08:00'),
     window: RAIN_POEM_ACTIVITY_WINDOW,
   },
 ]
 
 /** 目录接口为空时的兜底活动（保持历史行为：雨落成诗卡片仍可见） */
-export const FALLBACK_ACTIVITY_REGISTRATION = ACTIVITY_REGISTRATIONS.find(item => item.key === 'rain-poem')!
+export const FALLBACK_ACTIVITY_REGISTRATION = ACTIVITY_REGISTRATIONS.find(item => item.key === 'rain-poem') as ActivityRegistration
 
 /** 按活动组 ID 查找适配注册项；未适配返回 null */
 export function resolveActivityRegistration(activityIds: readonly number[]): ActivityRegistration | null {

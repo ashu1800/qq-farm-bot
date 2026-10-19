@@ -22,10 +22,6 @@ let shouldRefresh2x2Plan = true;
 
 const farmScheduler = createScheduler('farm');
 
-// ─── 辅助函数 ───
-
-/** 判断是否为临时性网络错误 */
-
 // ─── 核心巡田逻辑 ───
 
 /**

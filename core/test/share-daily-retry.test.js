@@ -56,11 +56,9 @@ test('daily share retries after a temporarily unavailable check without reconnec
         ClaimShareRewardReply: passthroughType,
       },
     });
-    const dateKey = () => {
-      const d = new Date();
-      return [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')].join('-');
-    };
-    stubModule(utilsPath, { log: () => {}, toNum: Number, getChinaDateKey: dateKey });
+    // 使用真实的 UTC+8 日期键实现，保证测试与线上每日判定一致。
+    const { getChinaDateKey } = require(utilsPath);
+    stubModule(utilsPath, { log: () => {}, toNum: Number, getChinaDateKey });
     stubModule(gameConfigPath, { getItemById: () => null });
 
     const { performDailyShare, getShareDailyState } = require(sharePath);

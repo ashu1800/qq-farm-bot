@@ -43,6 +43,8 @@ test('Activity.vue uses the registry instead of hardcoded activity ids', () => {
 test('activity cards sort by registration update date', () => {
   const activity = read(activityPath)
   const cardBlock = activity.slice(activity.indexOf('const activityCards'), activity.indexOf('const filteredActivityCards'))
-  assert.match(cardBlock, /updatedMs: registration \? registration\.updatedMs/)
+  // 排序用的更新日期来自活动窗口登记，而不是另写一份日期或拿开始时间冒充
+  assert.match(cardBlock, /updatedMs: registration \? registration\.window\.updatedMs/)
   assert.doesNotMatch(cardBlock, /updatedMs: window\.startMs/)
+  assert.doesNotMatch(cardBlock, /Date\.parse\(/)
 })

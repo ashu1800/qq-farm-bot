@@ -200,10 +200,6 @@ let loginReady = false;
 let appliedConfigRevision = 0;
 let unifiedSchedulerRunning = false;
 
-// ==================== 工具函数 ====================
-
-/** 判断是否是瞬时网络错误（可忽略） */
-
 // ==================== 农场/好友/偷菜 Tick 任务 ====================
 
 let farmTaskRunning = false;

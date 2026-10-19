@@ -138,7 +138,7 @@ function createWorkerManager(deps) {
         pending.timerTask = '';
     }
 
-    function startOfflineNotice(accountId, wrk, reason, action, message) {
+    function startOfflineNotice(accountId, wrk, reason, action) {
         if (!wrk || wrk.offlineReminderTriggered || wrk.offlineNoticePending) return false;
         const id = String(accountId || '');
         if (!id || pendingOfflineNotices.has(id)) return false;
@@ -151,7 +151,6 @@ function createWorkerManager(deps) {
             username: wrk.username || '',
             reason: cleanText(reason) || 'unknown',
             action: action || '',
-            message: message || '',
             since: Date.now(),
             timerTask: '',
             reloginAttempted: false,
@@ -245,8 +244,7 @@ function createWorkerManager(deps) {
         const minutes = Math.floor(offlineMs / 60000);
         const accountName = pending.accountName || (wrk && wrk.name) || '';
         const username = pending.username || (wrk && wrk.username) || '';
-        const message = pending.message
-            || `账号 ${accountName || pending.id} 离线 ${minutes} 分钟后仍未恢复（原因: ${reason}），已发送下线提醒`;
+        const message = `账号 ${accountName || pending.id} 离线 ${minutes} 分钟后仍未恢复（原因: ${reason}），已发送下线提醒`;
 
         triggerOfflineReminder({
             accountId: pending.accountId,
@@ -642,7 +640,7 @@ function createWorkerManager(deps) {
                 // 先挂起提醒，等 Worker 的重连循环或自动重登给出结果
                 if (!wrk.offlineReminderTriggered && !wrk.offlineNoticePending
                     && offlineDuration >= 60000) {
-                    startOfflineNotice(accountId, wrk, 'offline', 'offline_reminder', '');
+                    startOfflineNotice(accountId, wrk, 'offline', 'offline_reminder');
                 }
 
                 const autoDeleteMs = typeof getOfflineAutoDeleteMs === 'function'
@@ -718,7 +716,7 @@ function createWorkerManager(deps) {
             // Code 400 = 登录失效
             if (code === 400) {
                 startOfflineNotice(accountId, wrk, `ws_400:${message || '登录失效'}`,
-                    'offline_reminder', '');
+                    'offline_reminder');
                 addAccountLog('ws_400', `账号 ${  wrk.name  } 登录失效，请更新 Code`,
                     accountId, wrk.name);
                 if (typeof refreshAccountCode === 'function' && !credentialRefreshes.has(accountId)) {
@@ -744,14 +742,13 @@ function createWorkerManager(deps) {
                 accountName: wrk.name
             });
 
-            startOfflineNotice(accountId, wrk, `kickout:${reason}`, 'kickout_stop', '');
+            startOfflineNotice(accountId, wrk, `kickout:${reason}`, 'kickout_stop');
             addAccountLog('kickout_stop',
                 `账号 ${  wrk.name  } 被踢下线，已自动停止`,
                 accountId, wrk.name, { reason });
 
             stopWorker(accountId);
-            const scheduled = schedulePendingRelogin(accountId, `kickout:${reason}`)
-                || schedulePendingRelogin(accountId, 'kickout');
+            const scheduled = schedulePendingRelogin(accountId, `kickout:${reason}`);
             // 未启用自动重登时，停止 Worker 后没有任何恢复途径，需要立即提醒
             if (!scheduled) resolvePendingRelogin(accountId, false, { reason: `kickout:${reason}` });
         } else if (msg.type === 'ws_reconnect_failed') {
@@ -761,14 +758,13 @@ function createWorkerManager(deps) {
                 accountName: wrk.name
             });
 
-            startOfflineNotice(accountId, wrk, `ws_reconnect_failed:${reason}`, 'ws_reconnect_failed', '');
+            startOfflineNotice(accountId, wrk, `ws_reconnect_failed:${reason}`, 'ws_reconnect_failed');
             addAccountLog('ws_reconnect_failed',
                 `账号 ${  wrk.name  } 连接多次重试失败，已自动停止`,
                 accountId, wrk.name, { reason });
 
             stopWorker(accountId);
-            const scheduled = schedulePendingRelogin(accountId, `ws_reconnect_failed:${reason}`)
-                || schedulePendingRelogin(accountId, 'ws_reconnect_failed');
+            const scheduled = schedulePendingRelogin(accountId, `ws_reconnect_failed:${reason}`);
             // 未启用自动重登时，停止 Worker 后没有任何恢复途径，需要立即提醒
             if (!scheduled) resolvePendingRelogin(accountId, false, { reason: `ws_reconnect_failed:${reason}` });
         } else if (msg.type === 'client_version_update') {
@@ -827,14 +823,16 @@ function createWorkerManager(deps) {
             // 各自写 store.json 造成互相覆盖。
             const gids = Array.isArray(msg.gids) ? msg.gids : [];
             const store = require('../models/store');
-            store.setKnownFriendGids(accountId, gids);
+            // 好友刷新是 12–15 秒一轮的热路径，列表未变化时不要反复整份落盘。
+            const current = store.getKnownFriendGids(accountId);
+            if (current.length !== gids.length || gids.some((gid, index) => Number(gid) !== Number(current[index]))) {
+                store.setKnownFriendGids(accountId, gids);
+            }
         } else if (msg.type === 'known_friend_gid_remove') {
             const gid = Number(msg.gid) || 0;
             if (gid > 0) {
-                const store = require('../models/store');
-                const current = store.getKnownFriendGids(accountId) || [];
-                const next = current.filter(value => Number(value) !== gid);
-                if (next.length !== current.length) store.setKnownFriendGids(accountId, next);
+                // 移除逻辑收敛在 store 里，与后台路由的手工移除共用同一实现。
+                require('../models/store').removeKnownFriendGid(accountId, gid);
                 log('好友', `已移除失效好友 GID: ${msg.friendName || `GID:${gid}`}`, {
                     accountId: String(accountId),
                     accountName: wrk.name,
