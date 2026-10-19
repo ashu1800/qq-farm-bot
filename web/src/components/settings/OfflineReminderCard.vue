@@ -45,6 +45,11 @@ const config = defineModel<OfflineReminderConfig>('config', { required: true })
     </h4>
 
     <div class="space-y-3">
+      <p class="rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-500 dark:bg-gray-900/30 dark:text-gray-400">
+        掉线后不会立即通知：先等待自动重连和本次自动重登的结果，只有恢复失败才会发送提醒。
+        被踢下线或重连失败时，提醒会在下一次自动重登失败后发出（按“定时刷新重登”的间隔）。
+      </p>
+
       <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
         <div class="flex flex-col gap-1.5">
           <div class="flex items-center justify-between">

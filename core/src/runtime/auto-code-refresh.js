@@ -192,30 +192,42 @@ function createAutoCodeRefreshService(deps) {
     scheduler.clear(`relogin_${String(accountId || '')}`);
   }
 
-  function scheduleRelogin(accountId, reason = 'offline') {
+  /**
+   * 按账号间隔安排一次延迟重登。
+   * @param {string} accountId
+   * @param {string} [reason]
+   * @param {(ok: boolean) => void} [onResult] - 重登尝试结束时回调，供下线提醒等待结果
+   * @returns {{ delayMs: number } | null} 排期信息；未排期时返回 null
+   */
+  function scheduleRelogin(accountId, reason = 'offline', onResult = null) {
     const cfg = normalizeConfig(accountId);
-    if (!cfg.enabled) return false;
+    if (!cfg.enabled) return null;
     const account = findAccount(accountId);
-    if (!account) return false;
+    if (!account) return null;
     const platform = String(account.platform || '').toLowerCase();
-    if (platform === 'wx' && !account.loginBuffer) return false;
-    if (platform !== 'wx' && !String(account.uin || account.qq || '').trim()) return false;
+    if (platform === 'wx' && !account.loginBuffer) return null;
+    if (platform !== 'wx' && !String(account.uin || account.qq || '').trim()) return null;
     const recovery = getRecoveryState(accountId);
     if (recovery.attempts >= MAX_DAILY_RECOVERIES
       || recovery.failures >= MAX_CONSECUTIVE_FAILURES) {
       addAccountLog('auto_relogin_blocked', '自动重登次数已达上限，请检查网络或重新扫码',
         account.id, account.name, { reason, ...recovery });
-      return false;
+      return null;
     }
+    const delayMs = cfg.intervalMinutes * 60000;
     const taskName = `relogin_${String(accountId || '')}`;
     scheduler.clear(taskName);
-    scheduler.setTimeoutTask(taskName, cfg.intervalMinutes * 60000, () => {
-      refreshAccountCode(accountId, reason);
+    scheduler.setTimeoutTask(taskName, delayMs, () => {
+      refreshAccountCode(accountId, reason)
+        .then((ok) => {
+          if (typeof onResult === 'function') onResult(ok === true);
+        })
+        .catch(() => null);
     });
     log('系统', `账号 ${account.name} 将在 ${cfg.intervalMinutes} 分钟后自动刷新凭证并重登`, {
       accountId: String(accountId), accountName: account.name, reason,
     });
-    return true;
+    return { delayMs };
   }
 
   return {

@@ -400,7 +400,7 @@ function createDataProvider(deps) {
             const id = resolveAccountId(ref);
             const account = findAccount(id || ref);
             if (!account) return false;
-            if (id) stopWorker(id);
+            if (id) stopWorker(id, { userInitiated: true });
             return true;
         },
 
