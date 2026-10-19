@@ -8,7 +8,7 @@ test('solar rewards require the individual server window and claimable status', 
   for (const now of [99, 201]) assert.equal(isSolarTermClaimable(term, now), false);
   for (const now of [100, 150, 200]) assert.equal(isSolarTermClaimable(term, now), true);
   for (const status of [0, 1, 3, 5]) assert.equal(isSolarTermClaimable({ ...term, status }, 150), false);
-  for (const invalid of [{ startTime: 0 }, { endTime: 99 }, { endTime: NaN }]) assert.equal(isSolarTermClaimable({ ...term, ...invalid }, 150), false);
+  for (const invalid of [{ startTime: 0 }, { endTime: 99 }, { endTime: Number.NaN }]) assert.equal(isSolarTermClaimable({ ...term, ...invalid }, 150), false);
 });
 test('permanent solar automation survives the retired star activity and later dates', () => {
   for (const now of [1792029600, 1800000000, 1900000000]) {

@@ -16,7 +16,30 @@ function getOfflineReminderConfig(store, currentUser, body) {
     store.getOfflineReminder && currentUser
       ? store.getOfflineReminder(currentUser.username)
       : {};
-  return { ...(saved || {}), ...(body || {}) };
+  const patch = { ...(body || {}) };
+  // 前端拿不到明文密钥（见 buildSettingsPayload 的脱敏），留空表示“保持不变”。
+  for (const field of ["smtpPass", "token"]) {
+    if (patch[field] === "" || patch[field] === undefined || patch[field] === null) {
+      delete patch[field];
+    }
+  }
+  return { ...(saved || {}), ...patch };
+}
+
+/**
+ * 返回给前端的下线提醒配置。
+ * SMTP 授权码和推送 token 属于凭据，只回传“是否已配置”，不回传明文；
+ * 前端保存时留空即表示沿用原值。
+ */
+function maskOfflineReminder(config) {
+  const source = config && typeof config === "object" ? config : {};
+  return {
+    ...source,
+    smtpPass: "",
+    token: "",
+    smtpPassConfigured: String(source.smtpPass || "").trim() !== "",
+    tokenConfigured: String(source.token || "").trim() !== "",
+  };
 }
 
 async function sendOfflineReminderTest(config) {
@@ -138,7 +161,7 @@ function buildSettingsPayload(store, accountId, currentUser) {
     ui: store.getUI(),
     offlineReminder:
       store.getOfflineReminder && currentUser
-        ? store.getOfflineReminder(currentUser.username)
+        ? maskOfflineReminder(store.getOfflineReminder(currentUser.username))
         : offlineReminderDefault,
   };
 }
@@ -317,8 +340,9 @@ function registerAdminSettingsRoutes({
         return;
       }
 
+      // 前端回传的 smtpPass / token 为空表示“不修改”，这里合并已有值后再保存。
       const data = store.setOfflineReminder
-        ? store.setOfflineReminder(body, currentUser.username)
+        ? store.setOfflineReminder(getOfflineReminderConfig(store, currentUser, body), currentUser.username)
         : {};
       if (Number(body.offlineDeleteSec || 0) > 0) {
         logger.warn("更新下线提醒离线删除设置", {
@@ -328,7 +352,8 @@ function registerAdminSettingsRoutes({
           confirmation: "ENABLE_OFFLINE_DELETE",
         });
       }
-      res.json({ ok: true, data: data || {} });
+      // 保存响应同样脱敏，避免凭据回显到浏览器。
+      res.json({ ok: true, data: maskOfflineReminder(data || {}) });
     } catch (error) {
       res.status(500).json({ ok: false, error: error.message });
     }

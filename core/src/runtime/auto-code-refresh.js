@@ -1,5 +1,6 @@
 const { createScheduler } = require('../services/scheduler');
 const wxLoginAdapter = require('../services/wx-login-adapter');
+const { getChinaDateKey } = require('../utils/utils');
 
 function createAutoCodeRefreshService(deps) {
   const {
@@ -20,7 +21,8 @@ function createAutoCodeRefreshService(deps) {
   let refreshQueue = Promise.resolve();
 
   function getRecoveryState(accountId) {
-    const date = new Date().toISOString().slice(0, 10);
+    // 每日恢复次数按游戏服使用的 UTC+8 日期统计；用 UTC 日期会在凌晨 0–8 点算错一天。
+    const date = getChinaDateKey();
     const current = recoveryState.get(String(accountId));
     if (!current || current.date !== date) {
       const fresh = { date, attempts: 0, failures: 0 };

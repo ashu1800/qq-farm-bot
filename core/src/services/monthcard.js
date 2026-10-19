@@ -7,7 +7,7 @@
  */
 const { sendMsgAsync } = require('../utils/network');
 const { types } = require('../utils/proto');
-const { log, toNum } = require('../utils/utils');
+const { log, toNum, getChinaDateKey } = require('../utils/utils');
 const { getItemById } = require('../config/gameConfig');
 
 const DAILY_KEY = 'month_card_gift';
@@ -26,11 +26,8 @@ let lastHasClaimable = null;
 // ---- 日期工具 ----
 
 function getDateKey() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  // 统一按游戏服 UTC+8 日期判定“今天”，避免凌晨 0–8 点与 UTC 日期不一致。
+  return getChinaDateKey();
 }
 
 function markDoneToday() {

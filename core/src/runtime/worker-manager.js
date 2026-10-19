@@ -822,6 +822,26 @@ function createWorkerManager(deps) {
                 else pending.resolve(result);
                 wrk.requests.delete(id);
             }
+        } else if (msg.type === 'known_friend_gids_sync') {
+            // Worker 发现的已知好友 GID 由主进程统一落盘，避免多个 worker
+            // 各自写 store.json 造成互相覆盖。
+            const gids = Array.isArray(msg.gids) ? msg.gids : [];
+            const store = require('../models/store');
+            store.setKnownFriendGids(accountId, gids);
+        } else if (msg.type === 'known_friend_gid_remove') {
+            const gid = Number(msg.gid) || 0;
+            if (gid > 0) {
+                const store = require('../models/store');
+                const current = store.getKnownFriendGids(accountId) || [];
+                const next = current.filter(value => Number(value) !== gid);
+                if (next.length !== current.length) store.setKnownFriendGids(accountId, next);
+                log('好友', `已移除失效好友 GID: ${msg.friendName || `GID:${gid}`}`, {
+                    accountId: String(accountId),
+                    accountName: wrk.name,
+                    friendGid: gid,
+                    reason: msg.reason || ''
+                });
+            }
         } else if (msg.type === 'friend_blacklist_add') {
             // 好友黑名单添加
             const gid = Number(msg.gid) || 0;

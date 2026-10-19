@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 
-function createAdminSessionManager({ logger, getIo }) {
+// logger 保留在解构里是为了调用方接口稳定，当前实现未使用。
+function createAdminSessionManager({ logger: _logger, getIo }) {
   const adminTokens = new Set();
   const adminSessions = new Map();
 

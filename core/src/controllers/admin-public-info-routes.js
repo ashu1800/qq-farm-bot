@@ -10,7 +10,6 @@ const SCHEDULER_UNSUPPORTED_MESSAGE = "DataProvider does not support scheduler s
 function registerAdminPublicInfoRoutes({
   app,
   provider,
-  store,
   getAccountIdFromRequest,
   canAccessAccount,
   sendProviderError,

@@ -107,9 +107,9 @@ function createRuntimeState(deps) {
         const now = new Date();
         const timestamp = now.getTime();
         const normalizedAction = String(action || '');
-        const level = /(?:error|failed|failure|blocked|kickout|offline_delete|watchdog_stopped|ws_400)/i.test(normalizedAction)
+        const level = /error|failed|failure|blocked|kickout|offline_delete|watchdog_stopped|ws_400/i.test(normalizedAction)
             ? 'error'
-            : /(?:warn|offline|reconnect)/i.test(normalizedAction) ? 'warn' : 'info';
+            : /warn|offline|reconnect/i.test(normalizedAction) ? 'warn' : 'info';
         const entry = {
             logId: createLogId('account', timestamp),
             ts: timestamp,

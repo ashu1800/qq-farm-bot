@@ -201,7 +201,7 @@ test('达到每日限额后关闭对应动作', () => {
 // ---- 活动有效期 ----
 
 test('活动未开始或已结束时全部动作关闭', () => {
-    const group = now => ({
+    const group = () => ({
         pet: {
             head: { id: PET_ID, start_time: 1757000000, end_time: 1760000000 },
             pet_treasure_hunt: {

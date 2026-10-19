@@ -14,7 +14,10 @@ coverage/
 .turbo/
 
 core/data/
-core/docs/
+# core/docs/ 是受版本控制的设计与协议文档，不要整目录忽略。
+# 仅忽略本地排查时可能产生的临时文件。
+core/docs/**/*.tmp
+core/docs/**/*.local.md
 logs/
 log/
 tmp/

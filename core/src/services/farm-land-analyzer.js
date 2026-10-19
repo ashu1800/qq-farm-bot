@@ -1,6 +1,7 @@
 const { PlantPhase, PHASE_NAMES } = require('../config/config');
 const { getPlantName, getPlantExp, getPlantById, getPlantGrowTime, getPlantGrowPhases, getSeedImageBySeedId, getMutantDisplayPlantId, getMutantPlantImageByPhase, getMutantEffectsByIds } = require('../config/gameConfig');
 const { toNum, toTimeSec, getServerTimeSec, logWarn } = require('../utils/utils');
+const { isTransientNetworkError } = require('../utils/network-errors');
 const { getAllLands } = require('./farm-api');
 const { recordSeasonObservation } = require('./plant-model');
 const { publishLandSnapshot } = require('./exp-forecast');
@@ -114,15 +115,6 @@ function observePlantModel(lands, landMap = null) {
 }
 
 // ─── 辅助函数 ───
-
-function isTransientNetworkError(err) {
-  const msg = String(err && err.message || '');
-  if (!msg) return false;
-  return [
-    '连接未打开', '请求超时', '请求已中断',
-    '连接关闭', '发送失败', '请求队列已满'
-  ].some(pattern => msg.includes(pattern));
-}
 
 /**
  * 获取作物当前所处阶段。

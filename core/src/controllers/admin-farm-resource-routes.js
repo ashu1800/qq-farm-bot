@@ -66,10 +66,19 @@ function registerAdminFarmResourceRoutes({
       return;
 
     try {
-      let result = null;
-      for (const [key, value] of Object.entries(req.body)) {
-        result = await provider.setAutomation(accountId, key, value);
-      }
+      const patch = req.body && typeof req.body === "object" ? req.body : {};
+      // 前端每次保存都会提交完整的自动化配置（约 70+ 个键）。
+      // 逐键调用 setAutomation 会导致每次都读写 store.json 并向所有 worker
+      // 广播完整配置；这里合并成一次批量写入。
+      const result = typeof provider.setAutomationBatch === "function"
+        ? await provider.setAutomationBatch(accountId, patch)
+        : await (async () => {
+          let last = null;
+          for (const [key, value] of Object.entries(patch)) {
+            last = await provider.setAutomation(accountId, key, value);
+          }
+          return last;
+        })();
       res.json({ ok: true, data: result || {} });
     }
     catch (error) {

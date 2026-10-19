@@ -23,20 +23,13 @@ let taskClaimLastAt = 0;
 
 const taskScheduler = createScheduler('task');
 
-// 时区偏移（UTC+8）
-const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
-
 // ---- 日期工具（使用服务器时间 UTC+8） ----
 
 function getDateKey() {
-  const { getServerTimeSec } = require('../utils/utils');
+  // 任务每日状态与游戏服一致，按 UTC+8 日期判定。
+  const { getServerTimeSec, getChinaDateKey } = require('../utils/utils');
   const serverSec = getServerTimeSec();
-  const timestampMs = serverSec > 0 ? serverSec * 1000 : Date.now();
-  const date = new Date(timestampMs + UTC8_OFFSET_MS);
-  const year = date.getUTCFullYear();
-  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(date.getUTCDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return getChinaDateKey(serverSec > 0 ? serverSec * 1000 : Date.now());
 }
 
 // ---- 错误判断 ----

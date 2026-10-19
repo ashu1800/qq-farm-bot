@@ -104,9 +104,10 @@ const {
     networkEvents
 } = require('../utils/network');
 const { nextBusinessBackoffMs } = require('../utils/gateway-health');
+const { isTransientNetworkError } = require('../utils/network-errors');
 const { runWithRequestPriority } = require('../utils/request-priority');
 const { loadProto } = require('../utils/proto');
-const { setLogHook, log, toNum } = require('../utils/utils');
+const { setLogHook, log, toNum, getChinaDateKey } = require('../utils/utils');
 const { resourcePolicy, createResourceMonitor } = require('../runtime/resource-policy');
 
 // 设置环境变量中的账号ID
@@ -202,12 +203,6 @@ let unifiedSchedulerRunning = false;
 // ==================== 工具函数 ====================
 
 /** 判断是否是瞬时网络错误（可忽略） */
-function isTransientNetworkError(err) {
-    const msg = String(err && err.message || '');
-    if (!msg) return false;
-    return ['连接未打开', '请求超时', '请求已中断', '连接关闭', '发送失败', '请求队列已满']
-        .some(text => msg.includes(text));
-}
 
 // ==================== 农场/好友/偷菜 Tick 任务 ====================
 
@@ -252,11 +247,8 @@ function isDailyRoutineEnabled() { return true; }
 
 /** 获取当天日期键 */
 function getLocalDateKey() {
-    const d = new Date();
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y  }-${  m  }-${  day}`;
+    // 每日任务跨日判定按游戏服 UTC+8 日期。
+    return getChinaDateKey();
 }
 
 // ==================== 每日任务 ====================
@@ -1750,9 +1742,6 @@ async function handleApiCall(msg) {
                     result.weather = { type: 0, status: 0, rainstorm: false, error: weatherError.message };
                 }
                 break;
-            case 'getFarmScene':
-                result = await require('../services/farm-scene').getFarmScene();
-                break;
             case 'getFriends':
                 result = await getFriendsList(args[0] === true);
                 break;
@@ -1862,11 +1851,6 @@ async function handleApiCall(msg) {
             case 'checkAndBuyFertilizer': {
                 const opts = args[0] || {};
                 result = await checkAndBuyFertilizerBoth(opts);
-                break;
-            }
-            case 'getAnalytics': {
-                const { getPlantRankings } = require('../services/analytics');
-                result = getPlantRankings(args[0]);
                 break;
             }
             case 'getShopInfo': {
@@ -2207,7 +2191,8 @@ async function getDailyGiftOverview() {
         : { doneToday: false, lastClaimAt: 0 };
 
     return {
-        date: new Date().toISOString().slice(0, 10),
+        // 每日状态按游戏服 UTC+8 日期标识，不能用 UTC 日期（凌晨 0–8 点会差一天）。
+        date: getChinaDateKey(),
         growth: {
             key: 'growth_task',
             label: '成长任务',

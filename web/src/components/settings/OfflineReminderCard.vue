@@ -18,6 +18,9 @@ interface OfflineReminderConfig {
   senderName: string
   recipientEmail: string
   emailContent: string
+  /** 后端只回传“是否已配置”，不回传明文 */
+  smtpPassConfigured?: boolean
+  tokenConfigured?: boolean
 }
 
 defineProps<{
@@ -108,7 +111,7 @@ const config = defineModel<OfflineReminderConfig>('config', { required: true })
             v-model="config.smtpPass"
             label="授权码"
             type="password"
-            placeholder="SMTP 授权码"
+            :placeholder="config.smtpPassConfigured ? '已配置，留空则保持不变' : 'SMTP 授权码'"
           />
           <BaseInput
             v-model="config.recipientEmail"
@@ -146,8 +149,8 @@ const config = defineModel<OfflineReminderConfig>('config', { required: true })
         <BaseInput
           v-model="config.token"
           label="Token"
-          type="text"
-          placeholder="接收端 token"
+          type="password"
+          :placeholder="config.tokenConfigured ? '已配置，留空则保持不变' : '接收端 token'"
         />
 
         <div class="grid grid-cols-1 gap-3 md:grid-cols-2">

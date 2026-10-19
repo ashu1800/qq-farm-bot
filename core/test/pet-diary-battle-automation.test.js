@@ -6,7 +6,7 @@ function fixture(overrides = {}) {
     let on = true;
     let pet = { active: true, startTime: 0, endTime: 10000000, hunt: { canPlunder: true },
         battleCount: 0, battleLimit: 20, balances: [{ id: '80101', count: '20', known: true }] };
-    const scans = [], actions = [], reports = [];
+    const scans = []; const actions = []; const reports = [];
     const deps = {
         getPet: async () => pet,
         getFriends: async () => Array.from({ length: 10 }, (_, i) => ({ gid: i + 1 })),
@@ -72,7 +72,7 @@ test('unavailable preview, expired treasure and mismatched response cannot battl
 });
 test('uncertain mutation stops round and next round refreshes account state', async () => {
     let writes = 0;
-    const f = fixture({ operate: async () => { writes++; throw Error('timeout'); } });
+    const f = fixture({ operate: async () => { writes++; throw new Error('timeout'); } });
     await f.run(); assert.equal(writes, 1);
     assert.ok(f.reports.some(([message]) => message.includes('timeout')));
     f.advance(300000); f.setPet({ battleCount: 20 }); await f.run(); assert.equal(writes, 1);

@@ -5,10 +5,16 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { registerAdminMallRoutes } = require('../src/controllers/admin-mall-routes');
 const sources = require('../src/gameConfig/MallImageSupplement.json');
+// 前端 TS 编译器来自 web 的依赖（core 自身不安装 typescript）。
+// eslint-disable-next-line antfu/no-import-node-modules-by-path
 const ts = require('../../web/node_modules/typescript');
 const availabilitySource = fs.readFileSync(path.join(__dirname, '../../web/src/composables/shop/useShopAvailability.ts'), 'utf8');
 const availabilityModule = { exports: {} };
+// 把前端 TS 转成 CommonJS 后在当前进程里求值，用于验证前后端商品可用性口径一致。
+// node_modules 路径与非模块求值都是测试夹具所需。
+/* eslint-disable antfu/no-import-node-modules-by-path, no-new-func */
 new Function('exports', ts.transpileModule(availabilitySource, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText)(availabilityModule.exports);
+/* eslint-enable antfu/no-import-node-modules-by-path, no-new-func */
 const { createShopAvailability } = availabilityModule.exports;
 
 async function listGoods(discounts, balances) {

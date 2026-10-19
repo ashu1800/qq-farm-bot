@@ -21,7 +21,7 @@ const {
 const { isAutomationOn } = require('../models/store');
 const { sendMsgAsync, networkEvents, getUserState } = require('../utils/network');
 const { types } = require('../utils/proto');
-const { toLong, toNum, log, logWarn, sleep, getServerTimeSec } = require('../utils/utils');
+const { toLong, toNum, log, logWarn, sleep, getServerTimeSec, getChinaDateKey } = require('../utils/utils');
 const { FIREWORK_ITEM_ID, createFireworkUse } = require('./firework-use');
 const { compareBagSeedGameOrder } = require('../utils/bag-seed-order');
 const { updateStatusGold } = require('./status');
@@ -69,11 +69,8 @@ let fertilizerGiftLastOpenAt = 0;
 // ---- 日期工具 ----
 
 function getDateKey() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  // 统一按游戏服 UTC+8 日期判定“今天”，避免凌晨 0–8 点与 UTC 日期不一致。
+  return getChinaDateKey();
 }
 
 // ---- RPC 调用 ----

@@ -569,7 +569,9 @@ watch(() => props.currentAccountId, loadQixiFriends)
               </section>
 
               <section class="border border-gray-100 rounded-lg p-4 space-y-3 dark:border-gray-700">
-                <h3 class="text-sm font-medium">节令小札</h3>
+                <h3 class="text-sm font-medium">
+                  节令小札
+                </h3>
                 <BaseSwitch v-model="automation.automation.star_solar_claim" label="自动领取节令奖励" />
               </section>
 
@@ -726,20 +728,21 @@ watch(() => props.currentAccountId, loadQixiFriends)
                     <BaseSwitch v-model="automation.automation[setting.key]" class="shrink-0" :aria-labelledby="`milk-tea-setting-${setting.key}`" />
                   </div>
                 </div>
-                <div v-if="showMilkTeaBusiness" class="mt-3 grid gap-3 sm:grid-cols-2">
+                <div v-if="showMilkTeaBusiness" class="grid mt-3 gap-3 sm:grid-cols-2">
                   <label class="text-sm">雇佣时长
-                    <select v-model.number="automation.automation.milk_tea_hire_duration" class="mt-1 w-full rounded border p-2 dark:bg-gray-900">
+                    <select v-model.number="automation.automation.milk_tea_hire_duration" class="mt-1 w-full border rounded p-2 dark:bg-gray-900">
                       <option :value="1">4 小时</option><option :value="2">12 小时</option><option :value="3">24 小时</option>
                     </select>
                   </label>
                   <label class="text-sm">雇佣类型
-                    <select v-model.number="automation.automation.milk_tea_hire_talent" class="mt-1 w-full rounded border p-2 dark:bg-gray-900">
+                    <select v-model.number="automation.automation.milk_tea_hire_talent" class="mt-1 w-full border rounded p-2 dark:bg-gray-900">
                       <option :value="0">任意好友</option><option :value="9001">金牌销售</option><option :value="9002">金牌宣传</option><option :value="9003">金牌服务</option><option :value="9004">实习员工（默默搬砖）</option>
                     </select>
                   </label>
-
                 </div>
-                <p v-if="showMilkTeaBusiness" class="mt-2 text-xs text-gray-500">指定类型无空闲好友时，依次选择其他空闲好友、实习员工；均不可用则等待下次检查。时长或奶茶券不足时跳过。</p>
+                <p v-if="showMilkTeaBusiness" class="mt-2 text-xs text-gray-500">
+                  指定类型无空闲好友时，依次选择其他空闲好友、实习员工；均不可用则等待下次检查。时长或奶茶券不足时跳过。
+                </p>
               </section>
               <section v-if="showPetDiaryActivity" class="border border-violet-100 rounded-lg p-4 space-y-3 dark:border-violet-900/40">
                 <div>

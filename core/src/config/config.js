@@ -49,6 +49,7 @@ const CONFIG = {
     friendCheckIntervalMin: 12000,     // 好友检查最小间隔 12秒
     friendCheckIntervalMax: 15000,     // 好友检查最大间隔 15秒
     adminPort: Number(process.env.ADMIN_PORT),
+    adminHost: String(process.env.ADMIN_BIND || '').trim(),
     adminPassword: process.env.ADMIN_PASSWORD
 };
 

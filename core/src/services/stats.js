@@ -1,6 +1,8 @@
 const process = require('node:process');
 const path = require('node:path');
 const { readJsonFile, writeJsonFileAtomic } = require('./json-db');
+const { getDataDir } = require('../config/runtime-paths');
+const { getChinaDateKey } = require('../utils/utils');
 const {
   initExpRate,
   recordExpSample,
@@ -11,17 +13,15 @@ const {
 // ─── 持久化路径 ───
 
 function getStatsFilePath(accountId) {
-  const baseDir = process.env.FARM_DATA_DIR || path.join(__dirname, '../../data');
-  return path.join(baseDir, 'stats', `${accountId  }.json`);
+  // 统一走 runtime-paths：pkg 打包模式下数据目录在 exe 同级，
+  // 这里不能再用 __dirname 推导，否则会和其它数据文件分离。
+  return path.join(getDataDir(), 'stats', `${accountId  }.json`);
 }
 
 /** 获取 YYYY-MM-DD 格式的当天日期键 */
 function getTodayKey() {
-  const d = new Date();
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  // 统一按游戏服 UTC+8 日期判定“今天”。
+  return getChinaDateKey();
 }
 
 function loadPersistedStats(accountId) {

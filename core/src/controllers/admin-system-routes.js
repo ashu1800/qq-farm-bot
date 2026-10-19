@@ -1,77 +1,14 @@
-const crypto = require("node:crypto");
-const fs = require("node:fs");
-const path = require("node:path");
-const multer = require("multer");
-const { getDataFile } = require("../config/runtime-paths");
-
-const LOGIN_ASSETS_DIR = getDataFile("login-assets");
-const LOGIN_LOGO_MAX_BYTES = 2 * 1024 * 1024;
-const LOGIN_LOGO_EXTENSIONS = new Map([
-  ["image/png", ".png"],
-  ["image/jpeg", ".jpg"],
-  ["image/webp", ".webp"],
-  ["image/gif", ".gif"],
-  ["image/svg+xml", ".svg"],
-  ["image/x-icon", ".ico"],
-  ["image/vnd.microsoft.icon", ".ico"],
-]);
-
-fs.mkdirSync(LOGIN_ASSETS_DIR, { recursive: true });
-
-const loginLogoUpload = multer({
-  storage: multer.diskStorage({
-    destination: LOGIN_ASSETS_DIR,
-    filename(req, file, callback) {
-      callback(null, `${crypto.randomUUID()}${LOGIN_LOGO_EXTENSIONS.get(file.mimetype)}`);
-    },
-  }),
-  limits: { fileSize: LOGIN_LOGO_MAX_BYTES, files: 1 },
-  fileFilter(req, file, callback) {
-    if (!LOGIN_LOGO_EXTENSIONS.has(file.mimetype)) {
-      return callback(new Error("仅支持 PNG、JPG、WebP、GIF、SVG 或 ICO 图片"));
-    }
-    return callback(null, true);
-  },
-}).single("file");
-
-function deleteManagedLoginLogo(logoUrl) {
-  const prefix = "/login-assets/";
-  const value = String(logoUrl || "");
-  if (!value.startsWith(prefix)) return;
-  const filename = path.basename(value.slice(prefix.length));
-  if (!filename) return;
-  try {
-    fs.unlinkSync(path.join(LOGIN_ASSETS_DIR, filename));
-  } catch {}
-}
-
 function registerAdminSystemRoutes({
   app,
   store,
   logger,
   requireAdminToken,
   requireAdminRole,
-  requireSuperAdminRole,
   requireDangerConfirmation,
   getDefaultSystemConfig,
   getRuntimeConfig,
   updateRuntimeConfig,
 }) {
-  const isAllowedPublicLink = (value) => {
-    const link = String(value || "").trim();
-    return (
-      !link ||
-      link.startsWith("/") ||
-      /^https?:\/\//i.test(link) ||
-      /^mqqapi:\/\//i.test(link)
-    );
-  };
-
-  const isAllowedImageLink = (value) => {
-    const link = String(value || "").trim();
-    return !link || link.startsWith("/") || /^https?:\/\//i.test(link);
-  };
-
   app.get(
    "/api/admin/system-config",
     requireAdminToken,

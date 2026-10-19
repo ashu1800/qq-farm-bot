@@ -145,7 +145,9 @@ async function fetchInteractReply() {
     throw new Error('访客记录 proto 未加载');
   }
 
-  // 并发锁
+  // 并发锁：另一路请求正在拉取访客记录时等待它完成。
+  // fetchInteractLock 在另一条异步链里被改写，静态分析不会把它识别为循环条件变量。
+  // eslint-disable-next-line no-unmodified-loop-condition
   while (fetchInteractLock) {
     await sleep(100);
   }

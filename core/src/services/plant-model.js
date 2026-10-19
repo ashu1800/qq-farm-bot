@@ -15,6 +15,7 @@
 const fs = require('node:fs');
 const { getDataFile } = require('../config/runtime-paths');
 const { readJsonFile, writeJsonFileAtomic } = require('./json-db');
+const { invalidateRankingCache } = require('./ranking-cache');
 
 const MODEL_VERSION = 1;
 const MODEL_FILENAME = 'plant-model.json';
@@ -178,6 +179,8 @@ function recordSeasonObservation(plantId, seasonIndex, seconds, meta = {}) {
   data.seasons[bucketKey] = bucket;
   lastRecordAt.set(key, Date.now());
   scheduleFlush();
+  // 校准数据变化会影响所有作物效率，通知排行缓存失效。
+  invalidateRankingCache();
   return { recorded: true };
 }
 
@@ -207,6 +210,8 @@ function recordFertilizerObservation(type, seconds) {
   data.fertilizer[kind] = entry;
   lastRecordAt.set(key, Date.now());
   scheduleFlush();
+  // 校准数据变化会影响所有作物效率，通知排行缓存失效。
+  invalidateRankingCache();
   return { recorded: true };
 }
 

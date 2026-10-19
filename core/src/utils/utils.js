@@ -61,6 +61,27 @@ function toTimeSec(val) {
     return n;
 }
 
+/**
+ * 游戏服务端日期键（UTC+8）。
+ *
+ * QQ 农场的每日刷新、活动起止时间都按 UTC+8 计算，因此「今天」也必须按 UTC+8 定义。
+ * 与 `Date#toISOString()` 的 UTC 日期不同：在 UTC+8 的 00:00–08:00 之间，
+ * UTC 日期键会落后一天，用它会算错每日次数和跨日重置。
+ *
+ * @param {number} [timestampMs] - 毫秒时间戳，默认当前时间
+ * @returns {string} YYYY-MM-DD
+ */
+function getChinaDateKey(timestampMs = Date.now()) {
+    const date = new Date(Number(timestampMs) || Date.now());
+    if (Number.isNaN(date.getTime())) return '';
+    // UTC+8 = UTC + 8h；用 getUTC* 读取可避免受宿主机时区影响。
+    const shifted = new Date(date.getTime() + 8 * 3600 * 1000);
+    const year = shifted.getUTCFullYear();
+    const month = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(shifted.getUTCDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
 // ============ 日志 ============
 let logHook = null;
 function setLogHook(hook) { logHook = hook; }
@@ -159,6 +180,6 @@ function randomDelay(minMs, maxMs) {
 module.exports = {
     toLong, toNum, now,
     setLogHook,
-    getServerTimeSec, syncServerTime, toTimeSec,
+    getServerTimeSec, syncServerTime, toTimeSec, getChinaDateKey,
     log, logWarn, sleep, randomDelay,
 };

@@ -8,6 +8,11 @@
 
 # 当前状态
 
+- 2026-10-19 全量体检与修复（见文末「2026-10-19 项目体检修复」）：修掉抓包服务
+  「默认开启但启动不运行」、worker→主进程 GID 同步消息无人处理、手动停止不取消重登、
+  `stats` 绕过统一数据目录、UTC/UTC+8 日期键混用等问题；设置保存合并为单次落盘与广播；
+  作物排行加缓存；活动卡片改为注册表驱动并按登记更新日期排序；补 11 个测试文件，
+  后端 520 个测试全绿、前后端 lint 与生产构建通过。
 - 掉线邮件已改为「先重试、失败才通知」（2026-10-19）：
   `core/src/runtime/worker-manager.js` 新增 `pendingOfflineNotices` 挂起状态。普通离线、
   WS 400、被踢、重连失败都先挂起，只有自动恢复明确失败（重登失败 / 自动重登未启用或已熔断 /
@@ -196,3 +201,62 @@
   经验增长时升级预估应单调下降；分析页未知收益作物显示「未知」且带「估算」角标。
 - 校准依赖真实观测：至少一次双季作物收获后才会出现 `season >= 2` 的实测记录；
   在此之前多季时长保持「估算」标记。
+
+## 2026-10-19 项目体检修复
+
+### 修掉的真实缺陷
+
+- **抓包服务启动**：`DEFAULT_CAPTURE_CONFIG.enabled = true`、README 也写「默认开启」，
+  但 `startAdminServer` 从未调用 `startEmbeddedCaptureService()`（提交 `304c22f` 只删了调用）。
+  现在启动时按配置嵌入，`/api/capture/config` 与「抓包登录」入口恢复可用。
+- **好友 GID 同步**：`friend-api` 会向主进程发 `known_friend_gids_sync` /
+  `known_friend_gid_remove`，但 `worker-manager` 从未处理，导致 GID 增删只停在内存与 IPC。
+  已补两个分支，由主进程 `store.setKnownFriendGids()` 统一落盘。
+- **手动停止账号**：`autoCodeRefresh.stopAccount()` 从未被调用，停止后已排期的重登仍会把
+  账号拉起。`data-provider.stopAccount()` 现在先取消重登再停 worker。
+- **死代码导致必崩分支**：删除 `worker.js` 中引用不存在模块 `services/farm-scene` 的
+  `getFarmScene` case，以及无调用方的 `getAnalytics` RPC 与 `doAnalytics` provider 方法。
+  新增 `module-resolution` 测试静态检查全部相对 require。
+- **数据目录**：`stats.js` 改用 `runtime-paths.getDataDir()`，pnpm/pkg 下不再与其它数据分离。
+- **日期键**：新增 `utils.getChinaDateKey()`（UTC+8），替换 `auto-code-refresh` 与 worker
+  每日状态中的 `toISOString()` UTC 日期，并统一 email/share/monthcard/qqvip/mall/warehouse/
+  stats/activity/store/worker/task/friend-operation-limits 的每日判定。
+
+### 性能与一致性
+
+- `/api/automation` 由「逐键 `setAutomation`」改为批量：新增 `store.setAutomationBatch()` 与
+  `provider.setAutomationBatch()`，一次落盘、一次广播（之前 72 个键会产生 12 次写盘 + 73 次广播）。
+- `analytics.getPlantRankings()` 缓存经济模型（291 种作物单次 47ms → 命中后 1ms），
+  校准数据更新通过 `services/ranking-cache.js` 失效缓存。
+- 活动卡片改为 `web/src/constants/activity-registry.ts` 驱动：适配面板、标题、图标、图片、
+  登记更新日期集中登记；列表按 `updatedMs` 倒序（不再用开始时间冒充更新日期）。
+- 新增 `activity-window-sync` 测试：解析两端字面量，缺少前端窗口直接失败。
+- 统一 `utils/network-errors.js`，删除 6 份漂移的 `isTransientNetworkError`，
+  并把「请求调度队列已满」纳入瞬态判定。
+
+### 安全与清理
+
+- `/api/settings` 与保存响应不再返回 SMTP 授权码、推送 token 明文，只回传 `*Configured`；
+  前端留空表示保持原值。
+- 新增 `ADMIN_BIND`（默认仍为 `0.0.0.0`），监听全网卡时启动日志给出明确告警；
+  README 与 compose 补充「面板无鉴权」说明。
+- 删除零引用模块：`services/security.js`、`services/rate-limiter.js`、
+  `WxLoginModal.vue`、`ThemeToggle.vue`、`admin/AdminActivityUpdatePanel.vue`、
+  `admin/AdminAlertModal.vue`；清理 `admin-system-routes.js` 中已无路由使用的图片上传代码。
+- `.gitignore` 不再整目录忽略 `core/docs/`；补回被代码引用的
+  `core/docs/pet-diary-protocol-recovery.md`。
+- `core` 与 `web` 的 ESLint 基线清零（`wx-login/**` 编译产物与合并脚本加入 ignores）。
+- `crystal-animation` 测试：探测 `python3`/`python`/`py`（Windows 的 `python3` 常是商店占位符），
+  生成脚本显式使用 LF 换行。后端 520 个测试全部通过。
+
+### 验证
+
+- `cd core && node --test test/*.test.js`：520 通过 / 0 失败。
+- `cd web && npm test`：6 通过。
+- `core`、`web` ESLint 均 0 error；`vue-tsc -b` 与 `vite build` 通过。
+
+### 待人工验收
+
+- 真实账号下停止账号后确认不会在重登间隔到点后自动启动。
+- 全新部署启动后确认「添加账号 → 抓包登录」直接可用（无需先保存一次抓包配置）。
+- 活动中心卡片顺序应为：奶茶热销中 → 萌宠日记 → 秋祈良愿 / 快乐不独享 → 公益小红花 → 雨落成诗 → 节令小札。

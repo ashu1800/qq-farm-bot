@@ -110,6 +110,9 @@ export interface OfflineConfig {
   senderName: string
   recipientEmail: string
   emailContent: string
+  /** 后端只回传“是否已配置”，不回传明文 */
+  smtpPassConfigured?: boolean
+  tokenConfigured?: boolean
 }
 
 export interface OfflineConfigSavePayload extends OfflineConfig {

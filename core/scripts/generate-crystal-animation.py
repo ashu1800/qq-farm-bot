@@ -119,4 +119,6 @@ def generate():
 if __name__ == '__main__':
     target = ROOT / 'web/src/styles/official-crystal-animation.css'
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(generate())
+    # 仓库统一 LF（.gitattributes: eol=lf）；Windows 上默认换行是 CRLF，
+    # 显式指定可避免生成文件与测试断言/版本库内容不一致。
+    target.write_text(generate(), newline='\n')

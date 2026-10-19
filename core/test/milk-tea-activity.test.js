@@ -42,7 +42,7 @@ function setup({ now = WINDOW.startTime + 100, diamond = false, unlocked = true,
     { head: { id: '2026110104' }, share_reward: { summary: { current_score: 10, milestones: [{ tier_id: 1, threshold: 10, state: 2, rewards: [{ id: '80014', count: '1' }] }] } } },
     { head: { id: '2026110103' }, growth_fund: { unlocked: fundUnlocked, unlock_cost: [{ id: '1004', count: '360' }], tiers: [{ tier_id: 1, state: fundState, conditions: [{ type: 'milk_tea_store_level', current_value: 1, target_value: 1, reached: true }], reward: [{ id: '29005', count: '2' }] }] } }
   );
-  const service = createMilkTeaService({ log: (...args) => logs.push(args), types, getServerTimeSec: () => now, getUserState: () => account, log: (...args) => logs.push(args), getBag: async () => inventory, getBagItems: x => x, itemDto: x => ({ ...x, name: '夹具物品' }), sendMsgAsync: async (_, method, bytes) => {
+  const service = createMilkTeaService({ log: (...args) => logs.push(args), types, getServerTimeSec: () => now, getUserState: () => account, getBag: async () => inventory, getBagItems: x => x, itemDto: x => ({ ...x, name: '夹具物品' }), sendMsgAsync: async (_, method, bytes) => {
     if (method === 'GetGroup') return { body: types.MilkTeaGetGroupReply.encode(types.MilkTeaGetGroupReply.fromObject(group)).finish() };
     const req = types.MilkTeaOperateRequest.toObject(types.MilkTeaOperateRequest.decode(bytes), { longs: String });calls.push(req);
     const fixture = Number(req.cmd) === 56 && hireList ? { id: req.id, cmd: req.cmd, milk_tea_get_hire_list: hireList } : Number(req.cmd) === 57 ? { id: req.id, cmd: req.cmd, milk_tea_hire: { results: [{ success: hireSuccess }] } } : Number(req.cmd) === 55 ? fixtures[282] : Number(req.cmd) === 58 ? fixtures[283] : Number(req.cmd) === 63 ? fixtures[206] : Number(req.cmd) === 67 && salesLog ? { id: req.id, cmd: req.cmd, milk_tea_get_sales_log: salesLog } : { id: req.id, cmd: req.cmd };
@@ -221,7 +221,7 @@ test('batch shop quantity matches latest official encoder reconstruction', () =>
 const { selectHireCandidate, normalizeHireOptions } = require('../src/services/activity-milk-tea');
 const employee = (gid, talent, extra = {}) => ({ friend: { gid: String(gid) }, talent_id: talent, state: 0, ...extra });
 test('hire chooses first matching idle friend, then other idle friends, then interns', () => {
-  const other = employee(1, 9002), matching = employee(2, 9001), robot = employee(3, 9004, { is_robot: true });
+  const other = employee(1, 9002); const matching = employee(2, 9001); const robot = employee(3, 9004, { is_robot: true });
   const candidates = { friends: [employee(4, 9001, { state: 1 }), other, matching, employee(5, 9001)], robots: [robot] };
   assert.equal(selectHireCandidate(candidates, { talentId: 9001 }, 100), matching);
   assert.equal(selectHireCandidate(candidates, { talentId: 9003 }, 100), other);

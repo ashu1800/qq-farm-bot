@@ -1,4 +1,4 @@
-const { toNum, log, sleep } = require('../utils/utils');
+const { toNum, log, sleep, getChinaDateKey } = require('../utils/utils');
 const { getUserState, sendMsgAsync, networkEvents } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { toLong } = require('../utils/utils');
@@ -44,13 +44,8 @@ function checkDailyReset() {
     ? serverSec * 1000
     : Date.now();
 
-  // UTC+8 timezone offset: 8 hours in milliseconds
-  const UTC_PLUS_8_OFFSET_MS = 8 * 3600 * 1000;
-  const chinaDate = new Date(serverMs + UTC_PLUS_8_OFFSET_MS);
-  const year = chinaDate.getUTCFullYear();
-  const month = String(chinaDate.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(chinaDate.getUTCDate()).padStart(2, '0');
-  const today = `${year}-${month}-${day}`;
+  // 每日操作限制按游戏服 UTC+8 日期重置（与其它模块共用同一实现）
+  const today = getChinaDateKey(serverMs);
 
   if (lastResetDate !== today) {
     if (lastResetDate !== '') {

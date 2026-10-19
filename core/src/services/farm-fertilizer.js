@@ -1,4 +1,5 @@
 const { sendMsgAsync } = require('../utils/network');
+const { isTransientNetworkError } = require('../utils/network-errors');
 const { types } = require('../utils/proto');
 const { PlantPhase } = require('../config/config');
 const { toNum, toTimeSec, getServerTimeSec, log, logWarn, randomDelay } = require('../utils/utils');
@@ -23,15 +24,6 @@ const FERTILIZER_LAND_TYPE_LABELS = {
 };
 
 // ─── 辅助函数 ───
-
-function isTransientNetworkError(err) {
-  const msg = String(err && err.message || '');
-  if (!msg) return false;
-  return [
-    '连接未打开', '请求超时', '请求已中断',
-    '连接关闭', '发送失败', '请求队列已满'
-  ].some(pattern => msg.includes(pattern));
-}
 
 /** 从原始地块数据推导剩余成熟秒数（无法推导时返回 null） */
 function getRemainingMatureSec(land) {

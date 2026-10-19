@@ -81,7 +81,6 @@ const PUBLIC_API_PATHS = new Set([
   "/health",
 ]);
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
-const ONE_MINUTE_MS = 60 * 1000;
 const LOG_SNAPSHOT_LIMIT = 100;
 const HTTP_REQUEST_TIMEOUT_MS = 120 * 1000;
 const HTTP_HEADERS_TIMEOUT_MS = 16 * 1000;
@@ -355,7 +354,6 @@ function startAdminServer(dataProvider) {
     getSession: getAdminSession,
     hasToken: hasAdminToken,
     invalidateAdminSessionAndDisconnect,
-    invalidateAdminSessions,
     requireAdminToken,
     updateAdminSessions,
   } = adminSessionManager;
@@ -541,7 +539,9 @@ function startAdminServer(dataProvider) {
     getRuntimeConfig,
     updateRuntimeConfig,
   });
-  adminLogger.info("抓包服务默认关闭，未随管理面板启动运行");
+  // 抓包服务默认开启（见 DEFAULT_CAPTURE_CONFIG）；启动时按配置嵌入本进程。
+  // 用户之后在「系统配置 → Code/GID 抓取服务」保存的关闭状态会保留。
+  startEmbeddedCaptureService();
   registerAdminCaptureRoutes({
     app,
     store,
@@ -677,11 +677,22 @@ function startAdminServer(dataProvider) {
   };
 
   const adminPort = CONFIG.adminPort || 3007;
-  server = app.listen(adminPort, "0.0.0.0", () => {
+  // 管理面板没有登录门槛（/api/auto-login 会直接签发 token），
+  // 因此绑定地址必须是可配置的：只在本机/内网使用时建议设为 127.0.0.1。
+  const adminHost = String(process.env.ADMIN_BIND || CONFIG.adminHost || "0.0.0.0").trim() || "0.0.0.0";
+  server = app.listen(adminPort, adminHost, () => {
     adminLogger.info("admin panel started", {
       url: `http://localhost:${  adminPort}`,
       port: adminPort,
+      host: adminHost,
     });
+    if (adminHost === "0.0.0.0" || adminHost === "::") {
+      adminLogger.warn(
+        "管理面板未启用登录鉴权，当前监听所有网卡；请勿直接暴露到公网。"
+        + "仅本机/内网使用时可在环境变量中设置 ADMIN_BIND=127.0.0.1。",
+        { host: adminHost, port: adminPort },
+      );
+    }
   });
   configureHttpServerTimeouts(server);
   trackHttpConnections(server);

@@ -28,14 +28,14 @@ test('shared list cache merges concurrent reads and refreshes after five minutes
 test('empty and failed friend refreshes are rate limited but recover', async () => {
     for (const fails of [true, false]) {
         let calls = 0;
-        const f = fixture(async () => { calls++; if (fails && calls === 1) throw Error('offline'); return { game_friends: [] }; });
+        const f = fixture(async () => { calls++; if (fails && calls === 1) throw new Error('offline'); return { game_friends: [] }; });
         await f.getFriendsList(); await f.getFriendsList(); assert.equal(calls, 1);
         f.advance(300000); await f.getFriendsList(); assert.equal(calls, 2);
     }
 });
 
 test('empty visitor discovery retries after cooldown and keeps existing excluded GIDs', async () => {
-    let now = 1000, calls = 0, known = [9];
+    let now = 1000; let calls = 0; let known = [9];
     const context = { module: { exports: {} }, process: { env: {} }, Date: { now: () => now },
         require: name => {
             if (name === '../models/store') return { getKnownFriendGids: () => known,

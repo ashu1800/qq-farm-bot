@@ -9,6 +9,7 @@ const {
   readFriendDogInfoCache,
 } = require('../models/store');
 const { getUserState, isConnected, networkEvents } = require('../utils/network');
+const { isTransientNetworkError } = require('../utils/network-errors');
 const { toNum, log, logWarn, randomDelay } = require('../utils/utils');
 const { setOperationLimitsCallback } = require('./farm');
 const { createScheduler } = require('./scheduler');
@@ -71,19 +72,6 @@ let onFriendLandsObserved = null;
 const BAD_FAILURE_LIMIT = 3;
 
 // ===== Helpers =====
-
-function isTransientNetworkError(err) {
-  const msg = String((err && err.message) || '');
-  if (!msg) return false;
-  return [
-    '连接未打开',
-    '请求超时',
-    '请求已中断',
-    '连接关闭',
-    '发送失败',
-    '请求队列已满',
-  ].some(kw => msg.includes(kw));
-}
 
 function clearFriendsListCache() {
   setFriendsListCache(null);

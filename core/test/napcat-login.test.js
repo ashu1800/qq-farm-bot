@@ -78,7 +78,7 @@ test('NapCat restarts out of a hot session before requesting a new QR code', asy
   const originalFetch = globalThis.fetch;
   const calls = [];
   let phase = 'logged_in';
-  globalThis.fetch = async (url, options) => {
+  globalThis.fetch = async (url) => {
     const pathname = new URL(String(url)).pathname;
     calls.push(pathname);
     if (pathname.endsWith('/auth/login')) return json({ code: 0, data: { Credential: 'credential' } });
@@ -187,7 +187,7 @@ test('NapCat refresh restarts away a different hot account before quick login', 
   const originalFetch = globalThis.fetch;
   const calls = [];
   let hotUin = '999';
-  globalThis.fetch = async (url, options) => {
+  globalThis.fetch = async (url) => {
     const pathname = new URL(String(url)).pathname;
     calls.push(pathname);
     if (pathname.endsWith('/auth/login')) return refreshJson({ code: 0, data: { Credential: 'credential' } });

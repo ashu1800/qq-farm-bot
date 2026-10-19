@@ -4,6 +4,7 @@ const path = require('node:path');
 const { getDataFile, ensureDataDir } = require('../config/runtime-paths');
 const { readTextFile, readJsonFile, writeJsonFileAtomic } = require('../services/json-db');
 const { compareBagSeedGameOrder } = require('../utils/bag-seed-order');
+const { getChinaDateKey } = require('../utils/utils');
 
 // ==================== 文件路径 ====================
 
@@ -69,12 +70,8 @@ function getFriendDogInfoCacheFile(accountId) {
 }
 
 function getLocalDateKey(timestamp = Date.now()) {
-    const date = new Date(timestamp);
-    if (Number.isNaN(date.getTime())) return '';
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
+    // 好友犬缓存按游戏服 UTC+8 日期失效，避免凌晨 0–8 点与 UTC 日期不一致。
+    return getChinaDateKey(timestamp);
 }
 
 function normalizeFriendDogInfoCache(data, now = Date.now()) {
@@ -1414,11 +1411,21 @@ function applyConfigSnapshot(patch = {}, opts = {}) {
 }
 
 function setAutomation(key, value, accountId) {
-    const patch = { automation: { [key]: value } };
-    if (key === 'friend_bad' && value === true) {
-        patch.friendBadRetryDate = '';
-    }
-    return applyConfigSnapshot(patch, { accountId });
+    return setAutomationBatch({ [key]: value }, accountId);
+}
+
+/**
+ * 批量设置自动化开关。
+ * 与逐键调用 setAutomation 等价（包括开启 friend_bad 时清除重试日期），
+ * 但只做一次配置规范化、一次落盘。
+ * @param {object} patch - 形如 { farm: true, sell: false }
+ * @param {string} [accountId]
+ */
+function setAutomationBatch(patch, accountId) {
+    const input = patch && typeof patch === 'object' ? patch : {};
+    const next = { automation: input };
+    if (input.friend_bad === true) next.friendBadRetryDate = '';
+    return applyConfigSnapshot(next, { accountId });
 }
 
 function getAutoCodeRefresh(accountId) {
@@ -2056,6 +2063,7 @@ module.exports = {
     applyConfigSnapshot,
     getAutomation,
     setAutomation,
+    setAutomationBatch,
     getAutoCodeRefresh,
     setAutoCodeRefresh,
     getCapitalMode,

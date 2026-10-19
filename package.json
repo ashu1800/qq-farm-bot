@@ -1,4 +1,4 @@
- {
+{
   "name": "qq-farm-bot-ui",
   "packageManager": "pnpm@10.30.2",
   "scripts": {
@@ -16,7 +16,9 @@
     "package:linux": "pnpm build:web && pnpm -C core build:linux",
     "package:mac": "pnpm build:web && pnpm -C core build:mac",
     "package:release": "pnpm build:web && pnpm -C core build:release",
-    "install:all": "pnpm install -r"
+    "install:all": "pnpm install -r",
+    "test:web": "pnpm -C web test",
+    "test:core": "pnpm -C core test"
   },
   "pnpm": {
     "overrides": {

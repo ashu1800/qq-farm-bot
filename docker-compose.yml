@@ -19,6 +19,9 @@ services:
       TZ: Asia/Shanghai
       NODE_ENV: production
       ADMIN_PORT: "3007"
+      # 管理面板默认无登录鉴权。仅在本机/内网使用时建议设置为 127.0.0.1，
+      # 此时容器内监听回环地址，如需外部访问请改用宿主端口映射或反向代理鉴权。
+      # ADMIN_BIND: "127.0.0.1"
       FARM_DATA_DIR: /app/core/data
       CAPTURE_ADVERTISE_IPS: "${CAPTURE_ADVERTISE_IPS:-auto}"
       NAPCAT_LOGIN_ENABLED: "${NAPCAT_LOGIN_ENABLED:-false}"

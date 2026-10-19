@@ -98,7 +98,7 @@ async function runRainPoemPrankPlacement() {
   const queue = [
     ...bagItems.flatMap(item => (
       RAIN_POEM_PRANK_SOCIAL_TYPES.has(toNum(item?.id)) && toNum(item?.uid) > 0
-        ? Array(Math.max(0, toNum(item?.count))).fill(null).map(() => ({ itemId: toNum(item.id), itemUid: toNum(item.uid) }))
+        ? Array.from({length: Math.max(0, toNum(item?.count))}).fill(null).map(() => ({ itemId: toNum(item.id), itemUid: toNum(item.uid) }))
         : []
     )),
   ];

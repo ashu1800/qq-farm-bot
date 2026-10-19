@@ -160,7 +160,9 @@ function createRuntimeEngine(options = {}) {
         restartWorker,
         getResourceStatus,
         scheduleAutoCodeRefresh: autoCodeRefresh.scheduleAccount,
-        refreshAccountCode: autoCodeRefresh.refreshAccountCode
+        refreshAccountCode: autoCodeRefresh.refreshAccountCode,
+        // 用户停止/删除账号时必须一并取消已排期的自动重登，否则到点会把账号重新拉起。
+        stopAutoCodeRefresh: autoCodeRefresh.stopAccount
     };
     const dataProvider = createDataProvider(dataProviderDeps);
 

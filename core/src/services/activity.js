@@ -11,12 +11,12 @@ const protobuf = require('protobufjs/minimal');
 const path = require('node:path');
 const { sendMsgAsync, getUserState, isConnected } = require('../utils/network');
 const { types } = require('../utils/proto');
-const { toNum } = require('../utils/utils');
+const { toNum, getChinaDateKey } = require('../utils/utils');
 const { getItemImageById, getItemById } = require('../config/gameConfig');
 const { getDataDir } = require('../config/runtime-paths');
 const { createModuleLogger } = require('./logger');
 const { readJsonFile, writeJsonFileAtomic } = require('./json-db');
-const { getBag, getBagItems, useItem } = require('./warehouse');
+const { getBag, getBagItems } = require('./warehouse');
 const solarTermNames = new Map(require('../gameConfig/SolarTerms.json').terms.map(term => [term.id, term.name]));
 const wishSignRewards = require('../gameConfig/WishSignRewards.json');
 
@@ -118,11 +118,8 @@ function delay(ms) {
 }
 
 function getLocalDateKey() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  // 活动每日状态按游戏服 UTC+8 日期判定。
+  return getChinaDateKey();
 }
 
 function getQingmeiClaimStateKey() {
@@ -137,7 +134,7 @@ function getQixiDewLimitStateKey() {
 
 function getRainPoemSummonUsageFile() {
   const state = getUserState();
-  const accountKey = String(state?.gid || 'current').replace(/[^\w-]/gi, '_');
+  const accountKey = String(state?.gid || 'current').replace(/[^\w-]/g, '_');
   return path.join(getDataDir(), 'rain_poem_summon_usage', `${accountKey}.json`);
 }
 
@@ -244,7 +241,6 @@ const QIXI_ACTIVITY_ID = 2026081800;
 const QIXI_BRIDGE_ACTIVITY_ID = 2026081801;
 const QIXI_GIFT_ACTIVITY_ID = 2026081802;
 const QIXI_BRIDGE_CMD = 25;
-const QIXI_GIFT_OPEN_CMD = 7;
 const QIXI_GIFT_SEND_CMD = 26;
 const QIXI_FEATHER_ITEM_ID = 1024;
 const QIXI_SACHET_ITEM_ID = 1025;

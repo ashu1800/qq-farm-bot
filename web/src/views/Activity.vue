@@ -6,13 +6,14 @@ import api from '@/api'
 import CharityFlowerActivityPanel from '@/components/activity/CharityFlowerActivityPanel.vue'
 import HeluExchangePanel from '@/components/activity/HeluExchangePanel.vue'
 import HeluPassportPanel from '@/components/activity/HeluPassportPanel.vue'
-import SolarTermsActivityPanel from '@/components/activity/SolarTermsActivityPanel.vue'
 import HeluSolarTermsPanel from '@/components/activity/HeluSolarTermsPanel.vue'
 import QixiActivityPanel from '@/components/activity/QixiActivityPanel.vue'
 import RainPoemActivityPanel from '@/components/activity/RainPoemActivityPanel.vue'
+import SolarTermsActivityPanel from '@/components/activity/SolarTermsActivityPanel.vue'
 import StarRecordPanel from '@/components/activity/StarRecordPanel.vue'
-import BaseButton from '@/components/ui/BaseButton.vue'
 import WishShareActivityPanel from '@/components/activity/WishShareActivityPanel.vue'
+import BaseButton from '@/components/ui/BaseButton.vue'
+import { ACTIVITY_REGISTRATIONS, FALLBACK_ACTIVITY_REGISTRATION, resolveActivityRegistration } from '@/constants/activity-registry'
 import { CHARITY_FLOWER_ACTIVITY_WINDOW, isWithinActivityWindowMs, PET_DIARY_ACTIVITY_WINDOW, RAIN_POEM_ACTIVITY_WINDOW, SHARE_REWARD_ACTIVITY_WINDOW, WISH_SIGN_ACTIVITY_WINDOW } from '@/constants/activity-windows'
 import { useAccountStore } from '@/stores/account'
 import { useActivityStore } from '@/stores/activity'
@@ -201,18 +202,30 @@ const activityCards = computed(() => {
   const source = groups.length
     ? groups
     : [{
-        id: 2026070300,
-        title: '雨落成诗',
-        startTime: RAIN_POEM_ACTIVITY_WINDOW.startMs / 1000,
-        endTime: RAIN_POEM_ACTIVITY_WINDOW.endMs / 1000,
-        activityIds: [2026070300],
+        id: FALLBACK_ACTIVITY_REGISTRATION.ids[0],
+        title: FALLBACK_ACTIVITY_REGISTRATION.title,
+        startTime: FALLBACK_ACTIVITY_REGISTRATION.window.startMs / 1000,
+        endTime: FALLBACK_ACTIVITY_REGISTRATION.window.endMs / 1000,
+        activityIds: [FALLBACK_ACTIVITY_REGISTRATION.ids[0]],
       }]
-  if (!source.some(group => group.activityIds.includes(2026110100))) source.push({ id: 2026110100, title: '奶茶热销中', startTime: 1792029600, endTime: 1794844799, activityIds: [2026110100] })
+  // 目录接口尚未返回、但登记为常驻展示的活动（例如进行中的奶茶活动）
+  for (const registration of ACTIVITY_REGISTRATIONS) {
+    if (!registration.alwaysListed)
+      continue
+    if (source.some(group => group.activityIds.some(id => registration.ids.includes(id))))
+      continue
+    source.push({
+      id: registration.ids[0],
+      title: registration.title,
+      startTime: registration.window.startMs / 1000,
+      endTime: registration.window.endMs / 1000,
+      activityIds: [...registration.ids],
+    })
+  }
   const cards = source.map((group) => {
-    const adaptedKey = group.id === 2026090100
-      ? 'pet-diary' as const
-      : group.activityIds.includes(2026070300) ? 'rain-poem' as const : group.activityIds.includes(2026090900) ? 'charity-flower' as const : null
-    const adapted = group.activityIds.includes(2026110100) ? 'milk-tea' as const : group.activityIds.includes(2026092400) ? 'wish-sign' as const : group.activityIds.includes(2026092500) ? 'share-reward' as const : adaptedKey
+    // 适配面板与卡片元数据统一来自注册表，避免在这里堆叠活动 ID 三元表达式。
+    const registration = resolveActivityRegistration(group.activityIds)
+    const adapted = registration ? registration.key : null
     const window = { startMs: group.startTime * 1000, endMs: group.endTime * 1000 }
     const hue = Math.abs(group.id * 37) % 360
     return {
@@ -220,23 +233,20 @@ const activityCards = computed(() => {
       key: String(group.id),
       activityIds: group.activityIds,
       adaptedKey: adapted,
-      title: adapted === 'pet-diary' ? '萌宠日记' : group.title || `活动 ${group.id}`,
-      description: adapted
-        ? adapted === 'milk-tea' ? '经营奶茶小店、兑换商店与兼职工作' : adapted === 'pet-diary' ? '查看比熊成长、爪印手记、拾物小铺与比熊赠礼' : adapted === 'charity-flower' ? '查看爱心、公益进度与奖励状态' : adapted === 'wish-sign' ? '查看祈愿状态、祈愿池和每日奖励' : adapted === 'share-reward' ? '查看每日快乐值与档位进度' : '查看天气、每日进度与气象研究'
+      title: registration ? registration.title : group.title || `活动 ${group.id}`,
+      description: registration
+        ? registration.description
         : ACTIVITY_CLIENT_PREVIEWS.some(item => item.title === group.title || item.ids.some(id => group.activityIds.includes(id)))
           ? '已读取客户端静态预览，动态规则待服务端开放'
           : '暂未适配详情',
-      icon: {
-        '': 'i-carbon-calendar',
-        'milk-tea': 'i-carbon-cafe',
-        'pet-diary': 'i-fa-solid-paw',
-        'charity-flower': 'i-carbon-favorite',
-        'rain-poem': 'i-carbon-rain-heavy', 'wish-sign': 'i-carbon-sun', 'share-reward': 'i-carbon-share',
-      }[adapted || ''] || 'i-carbon-calendar',
-      image: adapted === 'milk-tea' ? '/activity/milk-tea/img_s4Main_bg.png' : adapted === 'pet-diary' ? '/activity/pet-diary/scene-home-adult.webp?v=20260912' : adapted === 'wish-sign' ? '/activity/wish-sign/card-bg.svg' : adapted === 'share-reward' ? '/activity/share-reward/card-bg.svg' : group.imageUrl || (adapted === 'rain-poem' ? '/activity/rain-poem/day-rain-bg.jpg' : ''),
-      imagePosition: adapted === 'pet-diary' ? 'center 64%' : 'center',
+      icon: registration ? registration.icon : 'i-carbon-calendar',
+      image: registration
+        ? registration.image || group.imageUrl || ''
+        : group.imageUrl || '',
+      imagePosition: registration?.imagePosition || 'center',
       window,
-      updatedMs: window.startMs,
+      // 活动列表按「登记更新日期」倒序；同一活动按开始时间倒序。
+      updatedMs: registration ? registration.updatedMs : window.startMs,
       status: activityWindowStatus(window),
       pending: !adapted && group.activityIds.some(id => unknownActivityIds.value.has(id)),
       backgroundStyle: {
@@ -244,12 +254,7 @@ const activityCards = computed(() => {
       },
     }
   })
-  cards.push({ permanent: true, key: 'solar-terms', activityIds: [], adaptedKey: null,
-    title: '节令小札', description: '查看各节令赠礼与领取状态', icon: 'i-carbon-notebook',
-    image: '', imagePosition: 'center', window: { startMs: 0, endMs: 0 },
-    updatedMs: Date.parse('2026-10-15T00:00:00+08:00'), status: 'active', pending: false,
-    backgroundStyle: { background: '#385c46' },
-  })
+  cards.push({ permanent: true, key: 'solar-terms', activityIds: [], adaptedKey: null, title: '节令小札', description: '查看各节令赠礼与领取状态', icon: 'i-carbon-notebook', image: '', imagePosition: 'center', window: { startMs: 0, endMs: 0 }, updatedMs: Date.parse('2026-10-15T00:00:00+08:00'), status: 'active', pending: false, backgroundStyle: { background: '#385c46' } })
   return cards.sort((left, right) => {
     return right.updatedMs - left.updatedMs
       || right.window.startMs - left.window.startMs
@@ -651,14 +656,22 @@ onUnmounted(() => {
       </div>
     </div>
     <div v-else-if="selectedActivityCard?.adaptedKey === 'wish-sign' && selectedActivityCard.status === 'active'" class="space-y-3">
-      <button class="inline-flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-gray-900 dark:hover:text-white" @click="selectedActivity = null"><span class="i-carbon-arrow-left" />返回活动列表</button>
+      <button class="inline-flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-gray-900 dark:hover:text-white" @click="selectedActivity = null">
+        <span class="i-carbon-arrow-left" />返回活动列表
+      </button>
       <WishShareActivityPanel v-if="wishSignActivityActive && currentAccountId" kind="wish" :activity="wishSignActivity" :loading="wishSignLoading" @refresh="refreshAll" />
-      <div v-else-if="wishSignActivityActive && !currentAccountId" class="rounded-lg bg-white p-10 text-center text-sm text-gray-500 shadow dark:bg-gray-800">{{ L.needAccount }}</div>
+      <div v-else-if="wishSignActivityActive && !currentAccountId" class="rounded-lg bg-white p-10 text-center text-sm text-gray-500 shadow dark:bg-gray-800">
+        {{ L.needAccount }}
+      </div>
     </div>
     <div v-else-if="selectedActivityCard?.adaptedKey === 'share-reward' && selectedActivityCard.status === 'active'" class="space-y-3">
-      <button class="inline-flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-gray-900 dark:hover:text-white" @click="selectedActivity = null"><span class="i-carbon-arrow-left" />返回活动列表</button>
+      <button class="inline-flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-gray-900 dark:hover:text-white" @click="selectedActivity = null">
+        <span class="i-carbon-arrow-left" />返回活动列表
+      </button>
       <WishShareActivityPanel v-if="shareRewardActivityActive && currentAccountId" kind="share" :activity="shareRewardActivity" :loading="shareRewardLoading" @refresh="refreshAll" />
-      <div v-else-if="shareRewardActivityActive && !currentAccountId" class="rounded-lg bg-white p-10 text-center text-sm text-gray-500 shadow dark:bg-gray-800">{{ L.needAccount }}</div>
+      <div v-else-if="shareRewardActivityActive && !currentAccountId" class="rounded-lg bg-white p-10 text-center text-sm text-gray-500 shadow dark:bg-gray-800">
+        {{ L.needAccount }}
+      </div>
     </div>
     <!--
       萌宠日记面板自带游戏风格顶栏与返回按钮，且直接读 usePetDiaryStore，
@@ -667,7 +680,7 @@ onUnmounted(() => {
     <div v-else-if="selectedActivityCard?.adaptedKey === 'milk-tea' && selectedActivityCard.status === 'active'">
       <MilkTeaActivityPanel @back="selectedActivity = null" />
     </div>
-    <div v-else-if="selectedActivityCard?.adaptedKey === 'pet-diary'  && selectedActivityCard.status === 'active'">
+    <div v-else-if="selectedActivityCard?.adaptedKey === 'pet-diary' && selectedActivityCard.status === 'active'">
       <PetDiaryActivityPanel v-if="petDiaryActivityActive && currentAccountId" @back="selectedActivity = null" />
       <div v-else-if="petDiaryActivityActive && !currentAccountId" class="space-y-3">
         <button class="inline-flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-gray-900 dark:hover:text-white" @click="selectedActivity = null">

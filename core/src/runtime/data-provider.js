@@ -26,7 +26,8 @@ function createDataProvider(deps) {
         restartWorker,
         getResourceStatus,
         scheduleAutoCodeRefresh,
-        refreshAccountCode
+        refreshAccountCode,
+        stopAutoCodeRefresh
     } = deps;
 
     /** 获取账号列表 */
@@ -187,7 +188,6 @@ function createDataProvider(deps) {
         removeAllPlants: (ref) => callWorkerApi(resolveAccountId(ref), 'removeAllPlants'),
         getShopInfo: (ref, shopId) => callWorkerApi(resolveAccountId(ref), 'getShopInfo', shopId),
         buyGoods: (ref, shopId, goodsId, count) => callWorkerApi(resolveAccountId(ref), 'buyGoods', shopId, goodsId, count),
-        doAnalytics: (ref, days) => callWorkerApi(resolveAccountId(ref), 'getAnalytics', days),
 
         // ========== Friend API ==========
         getFriends: (ref, force = false) => callWorkerApi(resolveAccountId(ref), 'getFriends', force,
@@ -269,6 +269,21 @@ function createDataProvider(deps) {
             const id = resolveAccountId(ref);
             if (!id) throw new Error('Missing x-account-id');
             store.setAutomation(key, value, id);
+            const rev = nextConfigRevision();
+            broadcastConfigToWorkers(id);
+            return { automation: store.getAutomation(id), configRevision: rev };
+        },
+
+        /**
+         * 批量写入自动化配置：只落盘一次、只广播一次。
+         * 前端每次保存都会提交整份自动化配置，逐键写入会把 store.json
+         * 反复读写并向所有 worker 广播几十次完整快照。
+         */
+        setAutomationBatch: async (ref, patch) => {
+            const id = resolveAccountId(ref);
+            if (!id) throw new Error('Missing x-account-id');
+            const input = patch && typeof patch === 'object' ? patch : {};
+            store.setAutomationBatch(input, id);
             const rev = nextConfigRevision();
             broadcastConfigToWorkers(id);
             return { automation: store.getAutomation(id), configRevision: rev };
@@ -400,6 +415,8 @@ function createDataProvider(deps) {
             const id = resolveAccountId(ref);
             const account = findAccount(id || ref);
             if (!account) return false;
+            // 先取消已排期的自动刷新/重登，避免用户停止后账号又被定时任务拉起。
+            if (typeof stopAutoCodeRefresh === 'function') stopAutoCodeRefresh(id || account.id);
             if (id) stopWorker(id, { userInitiated: true });
             return true;
         },

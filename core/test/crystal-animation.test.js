@@ -5,6 +5,22 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 
+/**
+ * 找到可用的 Python 3。
+ *
+ * Windows 上 `python3` 常常只是 Microsoft Store 的占位符（退出码 9009），
+ * 真正可用的是 `py` 或 `python`。这里按顺序探测，跳过不可执行的占位符。
+ */
+function resolvePython() {
+  for (const command of ['python3', 'python', 'py']) {
+    const probe = spawnSync(command, ['--version'], { encoding: 'utf8' });
+    if (probe.error || probe.status !== 0) continue;
+    if (!/^Python 3\./i.test(String(probe.stdout || probe.stderr || '').trim())) continue;
+    return command;
+  }
+  return null;
+}
+
 test('official crystal resources match recorded hashes and default clip', () => {
   const root = path.join(__dirname, '../src/gameConfig/effect_images/mutant/jinghui');
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'sources.json')));
@@ -18,8 +34,13 @@ test('official crystal resources match recorded hashes and default clip', () => 
   assert.equal(clip._duration, 80 / 60);
 });
 
-test('offline curve extraction reproduces checked-in animation and preserves key values', () => {
-  const result = spawnSync('python3', ['-c', `
+test('offline curve extraction reproduces checked-in animation and preserves key values', (t) => {
+  const python = resolvePython();
+  if (!python) {
+    t.skip('未找到可用的 Python 3');
+    return;
+  }
+  const result = spawnSync(python, ['-c', `
 import importlib.util, json
 from pathlib import Path
 spec = importlib.util.spec_from_file_location('crystal', 'scripts/generate-crystal-animation.py')
