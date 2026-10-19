@@ -19,6 +19,9 @@ const TRANSIENT_PATTERNS = [
   'worker exited',
 ];
 
+/** 预先把模式转小写，调用时只转换一次消息 */
+const TRANSIENT_PATTERNS_LOWER = TRANSIENT_PATTERNS.map(pattern => pattern.toLowerCase());
+
 /**
  * 是否为可重试的网络/调度瞬态错误
  * @param {Error|string|*} err
@@ -29,7 +32,7 @@ function isTransientNetworkError(err) {
   if (!message) return false;
   // 英文关键字大小写不统一（"Worker exited" / "worker exited"），统一转小写比较
   const lower = message.toLowerCase();
-  return TRANSIENT_PATTERNS.some(pattern => lower.includes(pattern.toLowerCase()));
+  return TRANSIENT_PATTERNS_LOWER.some(pattern => lower.includes(pattern));
 }
 
 module.exports = { isTransientNetworkError, TRANSIENT_PATTERNS };

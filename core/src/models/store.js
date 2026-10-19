@@ -4,7 +4,7 @@ const path = require('node:path');
 const { getDataFile, ensureDataDir } = require('../config/runtime-paths');
 const { readTextFile, readJsonFile, writeJsonFileAtomic } = require('../services/json-db');
 const { compareBagSeedGameOrder } = require('../utils/bag-seed-order');
-const { getChinaDateKey } = require('../utils/utils');
+const { getChinaDateKey } = require('../utils/date-key');
 
 // ==================== 文件路径 ====================
 
@@ -1511,6 +1511,17 @@ function setKnownFriendGids(accountId, gids) {
     return [...normalized];
 }
 
+/** 从已知好友 GID 列表移除一个 GID；列表未变化时不写盘 */
+function removeKnownFriendGid(accountId, gid) {
+    const target = Number(gid) || 0;
+    if (target <= 0) return false;
+    const current = getKnownFriendGids(accountId);
+    const next = current.filter(value => Number(value) !== target);
+    if (next.length === current.length) return false;
+    setKnownFriendGids(accountId, next);
+    return true;
+}
+
 function getFriendBlacklist(accountId) {
     return [...getAccountConfigSnapshot(accountId).friendBlacklist || []];
 }
@@ -2080,6 +2091,7 @@ module.exports = {
     getFriendQuietHours,
     getKnownFriendGids,
     setKnownFriendGids,
+    removeKnownFriendGid,
     getFriendBlacklist,
     setFriendBlacklist,
     addFriendToBlacklist,

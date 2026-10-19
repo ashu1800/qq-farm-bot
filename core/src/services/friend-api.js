@@ -907,7 +907,6 @@ module.exports = {
   getEffectiveKnownQqFriendGids,
   isEnterFarmBannedError,
   parseRpcErrorCode,
-  isTransientNetworkError,
   isInvalidFriendAccessError,
   addFriendToBlacklist,
   handleFriendEnterError,

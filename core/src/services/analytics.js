@@ -33,6 +33,8 @@ const SORT_METRICS = {
 const ECONOMY_CACHE_TTL_MS = 10 * 60 * 1000;
 
 let economyCache = null;
+/** 各排序方式的结果缓存：排序只在数据变化时做一次 */
+const rankingCache = new Map();
 
 /** 数值降序；null/undefined（例如收益未知）排在最后，且不参与比较 */
 function compareMetricDesc(key) {
@@ -70,6 +72,7 @@ function getEconomyModels() {
 /** 清空排行缓存（作物配置或校准数据变化后调用） */
 function resetPlantRankingCache() {
   economyCache = null;
+  rankingCache.clear();
 }
 
 // 校准数据更新时自动失效，避免新样本要等 TTL 才生效。
@@ -81,8 +84,11 @@ onRankingCacheInvalidate(resetPlantRankingCache);
  * @returns {object[]} 每项为 plant-economy 的模型结果
  */
 function getPlantRankings(sortBy = 'exp') {
-  const rankings = [...getEconomyModels()];
+  const cached = rankingCache.get(sortBy);
+  // 排序结果按 sortBy 缓存；返回浅拷贝，调用方修改数组不会污染缓存。
+  if (cached) return [...cached];
 
+  const rankings = [...getEconomyModels()];
   const metric = SORT_METRICS[sortBy];
   if (metric && NUMERIC_METRICS.has(metric)) {
     rankings.sort(compareMetricDesc(metric));
@@ -92,7 +98,8 @@ function getPlantRankings(sortBy = 'exp') {
     rankings.sort(compareMetricDesc('expPerHour'));
   }
 
-  return rankings;
+  rankingCache.set(sortBy, rankings);
+  return [...rankings];
 }
 
 module.exports = {

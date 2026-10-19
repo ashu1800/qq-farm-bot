@@ -344,10 +344,7 @@ function startAdminServer(dataProvider) {
   app.set("trust proxy", true);
   app.use(express.json({ limit: "256kb" }));
 
-  const adminSessionManager = createAdminSessionManager({
-    logger: adminLogger,
-    getIo: () => io,
-  });
+  const adminSessionManager = createAdminSessionManager({ getIo: () => io });
   const {
     cleanupInvalidAdminSessions,
     createAdminSession,
@@ -380,7 +377,6 @@ function startAdminServer(dataProvider) {
   const {
     requireAdminRole,
     requireDangerConfirmation,
-    requireSuperAdminRole,
     sendProviderError,
   } = adminRouteHelpers;
 
@@ -424,7 +420,6 @@ function startAdminServer(dataProvider) {
   registerAdminPublicInfoRoutes({
     app,
     provider,
-    store,
     userStore,
     getAccountIdFromRequest,
     canAccessAccount,
@@ -533,7 +528,6 @@ function startAdminServer(dataProvider) {
     logger: adminLogger,
     requireAdminToken,
     requireAdminRole,
-    requireSuperAdminRole,
     requireDangerConfirmation,
     getDefaultSystemConfig,
     getRuntimeConfig,
@@ -541,7 +535,9 @@ function startAdminServer(dataProvider) {
   });
   // 抓包服务默认开启（见 DEFAULT_CAPTURE_CONFIG）；启动时按配置嵌入本进程。
   // 用户之后在「系统配置 → Code/GID 抓取服务」保存的关闭状态会保留。
-  startEmbeddedCaptureService();
+  // createCaptureCore 会同步生成 CA（首次约 200ms），放到事件循环下一轮，
+  // 避免拖慢账号启动；启用的抓包请求会等待 core.ready。
+  setImmediate(() => startEmbeddedCaptureService());
   registerAdminCaptureRoutes({
     app,
     store,
@@ -679,7 +675,7 @@ function startAdminServer(dataProvider) {
   const adminPort = CONFIG.adminPort || 3007;
   // 管理面板没有登录门槛（/api/auto-login 会直接签发 token），
   // 因此绑定地址必须是可配置的：只在本机/内网使用时建议设为 127.0.0.1。
-  const adminHost = String(process.env.ADMIN_BIND || CONFIG.adminHost || "0.0.0.0").trim() || "0.0.0.0";
+  const adminHost = String(CONFIG.adminHost || "0.0.0.0").trim() || "0.0.0.0";
   server = app.listen(adminPort, adminHost, () => {
     adminLogger.info("admin panel started", {
       url: `http://localhost:${  adminPort}`,

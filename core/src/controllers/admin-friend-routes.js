@@ -265,14 +265,8 @@ function registerAdminFriendRoutes({
     }
 
     try {
-      const knownGids = store.getKnownFriendGids
-        ? store.getKnownFriendGids(accountId)
-        : [];
-      const nextKnownGids = Array.isArray(knownGids)
-        ? knownGids.filter((item) => Number(item) !== gid)
-        : [];
-      if (store.setKnownFriendGids) {
-        store.setKnownFriendGids(accountId, nextKnownGids);
+      if (store.removeKnownFriendGid) {
+        store.removeKnownFriendGid(accountId, gid);
       }
       broadcastConfig(provider, accountId);
       res.json({ ok: true, data: getKnownFriendGidsData(store, accountId) });

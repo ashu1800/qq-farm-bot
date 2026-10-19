@@ -82,7 +82,7 @@ function createDataProvider(deps) {
         return callWorkerReadOnce(key, accountId, 'getIllustratedList', type, level);
     }
 
-    return {
+    const api = {
         /** 获取账号运行状态 */
         getStatus: (ref) => {
             const id = resolveAccountId(ref);
@@ -265,15 +265,6 @@ function createDataProvider(deps) {
         getCareerInfo: (ref, gid) => callWorkerApi(resolveAccountId(ref), 'getCareerInfo', gid),
 
         // ========== 配置 ==========
-        setAutomation: async (ref, key, value) => {
-            const id = resolveAccountId(ref);
-            if (!id) throw new Error('Missing x-account-id');
-            store.setAutomation(key, value, id);
-            const rev = nextConfigRevision();
-            broadcastConfigToWorkers(id);
-            return { automation: store.getAutomation(id), configRevision: rev };
-        },
-
         /**
          * 批量写入自动化配置：只落盘一次、只广播一次。
          * 前端每次保存都会提交整份自动化配置，逐键写入会把 store.json
@@ -288,6 +279,9 @@ function createDataProvider(deps) {
             broadcastConfigToWorkers(id);
             return { automation: store.getAutomation(id), configRevision: rev };
         },
+
+        /** 单个开关的便捷写法，内部走同一条批量写入与广播路径。 */
+        setAutomation: (ref, key, value) => api.setAutomationBatch(ref, { [key]: value }),
 
         saveSettings: async (ref, settings) => {
             const id = resolveAccountId(ref);
@@ -460,6 +454,8 @@ function createDataProvider(deps) {
             return { accountId: id, runtime: runtimeSchedulers, resources: getResourceStatus?.() || null, worker: workerSchedulers, workerError };
         }
     };
+
+    return api;
 }
 
 module.exports = { createDataProvider };

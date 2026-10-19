@@ -1,22 +1,9 @@
 const test = require('node:test');
+const { useTempDataDir } = require('./helpers');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
 
-const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qf-ranking-cache-'));
-const logDir = path.join(os.tmpdir(), 'qf-test-logs');
-const previousDataDir = process.env.FARM_DATA_DIR;
-const previousLogDir = process.env.FARM_LOG_DIR;
-process.env.FARM_DATA_DIR = dataDir;
-process.env.FARM_LOG_DIR = logDir;
-test.after(() => {
-  if (previousDataDir === undefined) delete process.env.FARM_DATA_DIR;
-  else process.env.FARM_DATA_DIR = previousDataDir;
-  if (previousLogDir === undefined) delete process.env.FARM_LOG_DIR;
-  else process.env.FARM_LOG_DIR = previousLogDir;
-  fs.rmSync(dataDir, { recursive: true, force: true });
-});
+// 临时数据目录：统一走 test/helpers，避免每个文件各写一份环境变量恢复逻辑。
+useTempDataDir((fn) => test.after(fn), { prefix: 'qf-ranking-cache-' });
 
 const { getPlantRankings, resetPlantRankingCache } = require('../src/services/analytics');
 const { recordSeasonObservation } = require('../src/services/plant-model');

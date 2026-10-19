@@ -1,20 +1,14 @@
 const test = require('node:test');
+const { useTempDataDir } = require('./helpers');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 
 // Worker 通过 IPC 上报好友 GID 变更、主进程负责落盘。
 // 这里使用临时数据目录，避免触碰真实 core/data。
-const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qf-gid-sync-'));
-const previousDataDir = process.env.FARM_DATA_DIR;
-process.env.FARM_DATA_DIR = dataDir;
-test.after(() => {
-  if (previousDataDir === undefined) delete process.env.FARM_DATA_DIR;
-  else process.env.FARM_DATA_DIR = previousDataDir;
-  fs.rmSync(dataDir, { recursive: true, force: true });
-});
+// 临时数据目录：统一走 test/helpers，避免每个文件各写一份环境变量恢复逻辑。
+const { dataDir } = useTempDataDir((fn) => test.after(fn), { prefix: 'qf-friend-gid-sync-' });
 
 const { createWorkerManager } = require('../src/runtime/worker-manager');
 const store = require('../src/models/store');

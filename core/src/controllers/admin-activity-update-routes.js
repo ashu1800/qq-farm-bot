@@ -1,4 +1,5 @@
 const activity = require('../services/activity');
+const { getChinaDateKey } = require('../utils/date-key');
 const {
   getActivityUpdateState,
   runActivityUpdateScan,
@@ -24,10 +25,9 @@ function registerAdminActivityUpdateRoutes({ app, provider, requireAdminToken })
     .map(([, value]) => Number(value));
   const buildDateProbeIds = (days = 3, slots = 10) => {
     const ids = [];
-    const now = new Date();
     for (let offset = 0; offset <= days; offset += 1) {
-      const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset);
-      const prefix = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
+      // 活动 ID 前缀是服务端 UTC+8 日期（YYYYMMDD），不能按宿主机本地日期推算。
+      const prefix = getChinaDateKey(Date.now() + offset * 86400000).replaceAll('-', '');
       for (let slot = 0; slot < slots; slot += 1) ids.push(Number(`${prefix}${String(slot).padStart(2, '0')}`));
     }
     return ids;

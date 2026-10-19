@@ -1,27 +1,8 @@
 <script setup lang="ts">
+import type { OfflineConfig } from '@/stores/setting'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
-
-interface OfflineReminderConfig {
-  channel: string
-  reloginUrlMode: string
-  endpoint: string
-  token: string
-  title: string
-  msg: string
-  offlineDeleteSec: number
-  smtpHost: string
-  smtpPort: number
-  smtpUser: string
-  smtpPass: string
-  senderName: string
-  recipientEmail: string
-  emailContent: string
-  /** 后端只回传“是否已配置”，不回传明文 */
-  smtpPassConfigured?: boolean
-  tokenConfigured?: boolean
-}
 
 defineProps<{
   channelOptions: { label: string, value: string | number }[]
@@ -37,7 +18,7 @@ const emit = defineEmits<{
   save: []
 }>()
 
-const config = defineModel<OfflineReminderConfig>('config', { required: true })
+const config = defineModel<OfflineConfig>('config', { required: true })
 </script>
 
 <template>

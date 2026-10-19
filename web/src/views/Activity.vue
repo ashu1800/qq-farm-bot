@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { ActivityLabels, ActivitySection, ActivitySectionKey } from '@/components/activity/types'
+import type { ActivityRegistration } from '@/constants/activity-registry'
 import { storeToRefs } from 'pinia'
 import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
 import api from '@/api'
@@ -142,10 +143,10 @@ interface ActivityClientPreview {
   pending: string[]
 }
 
-const ACTIVITY_CLIENT_PREVIEWS: Array<{ ids: number[], title: string, preview: ActivityClientPreview }> = [
+// 客户端静态预览按活动 ID 归属，标题与 ID 统一取自活动注册表，避免第二份副本。
+const ACTIVITY_CLIENT_PREVIEWS: Array<{ registration: ActivityRegistration, preview: ActivityClientPreview }> = [
   {
-    ids: [2026090900, 2026090901],
-    title: '公益小红花',
+    registration: ACTIVITY_REGISTRATIONS.find(item => item.key === 'charity-flower') as ActivityRegistration,
     preview: {
       source: '最新版官方客户端生成协议、delayRes 配置与 Prefab',
       entryId: 2026090901,
@@ -174,12 +175,13 @@ const sections = computed<ActivitySection[]>(() => [
 ])
 
 function activityWindowStatus(window: { startMs: number, endMs: number }): 'upcoming' | 'active' | 'ended' {
-  if (nowMs.value < window.startMs)
-    return 'upcoming'
-  if (nowMs.value > window.endMs)
-    return 'ended'
-  return 'active'
+  if (isWithinActivityWindowMs(window, nowMs.value))
+    return 'active'
+  return nowMs.value < window.startMs ? 'upcoming' : 'ended'
 }
+
+/** 节令小札是常驻卡片，没有活动窗口；更新日期单独登记。 */
+const SOLAR_TERMS_CARD_UPDATED_MS = Date.parse('2026-10-15T00:00:00+08:00')
 
 const activityCards = computed(() => {
   const groups: Array<{ id: number, title: string, startTime: number, endTime: number, imageUrl?: string, activityIds: number[] }> = []
@@ -236,7 +238,7 @@ const activityCards = computed(() => {
       title: registration ? registration.title : group.title || `活动 ${group.id}`,
       description: registration
         ? registration.description
-        : ACTIVITY_CLIENT_PREVIEWS.some(item => item.title === group.title || item.ids.some(id => group.activityIds.includes(id)))
+        : ACTIVITY_CLIENT_PREVIEWS.some(item => item.registration.title === group.title || item.registration.ids.some(id => group.activityIds.includes(id)))
           ? '已读取客户端静态预览，动态规则待服务端开放'
           : '暂未适配详情',
       icon: registration ? registration.icon : 'i-carbon-calendar',
@@ -245,8 +247,8 @@ const activityCards = computed(() => {
         : group.imageUrl || '',
       imagePosition: registration?.imagePosition || 'center',
       window,
-      // 活动列表按「登记更新日期」倒序；同一活动按开始时间倒序。
-      updatedMs: registration ? registration.updatedMs : window.startMs,
+      // 列表按「活动窗口登记的更新日期」倒序；未登记的活动退回开始时间。
+      updatedMs: registration ? registration.window.updatedMs : window.startMs,
       status: activityWindowStatus(window),
       pending: !adapted && group.activityIds.some(id => unknownActivityIds.value.has(id)),
       backgroundStyle: {
@@ -254,7 +256,7 @@ const activityCards = computed(() => {
       },
     }
   })
-  cards.push({ permanent: true, key: 'solar-terms', activityIds: [], adaptedKey: null, title: '节令小札', description: '查看各节令赠礼与领取状态', icon: 'i-carbon-notebook', image: '', imagePosition: 'center', window: { startMs: 0, endMs: 0 }, updatedMs: Date.parse('2026-10-15T00:00:00+08:00'), status: 'active', pending: false, backgroundStyle: { background: '#385c46' } })
+  cards.push({ permanent: true, key: 'solar-terms', activityIds: [], adaptedKey: null, title: '节令小札', description: '查看各节令赠礼与领取状态', icon: 'i-carbon-notebook', image: '', imagePosition: 'center', window: { startMs: 0, endMs: 0 }, updatedMs: SOLAR_TERMS_CARD_UPDATED_MS, status: 'active', pending: false, backgroundStyle: { background: '#385c46' } })
   return cards.sort((left, right) => {
     return right.updatedMs - left.updatedMs
       || right.window.startMs - left.window.startMs
@@ -266,8 +268,8 @@ const selectedActivityClientPreview = computed(() => {
   const card = selectedActivityCard.value
   if (!card)
     return null
-  return ACTIVITY_CLIENT_PREVIEWS.find(item => item.title === card.title
-    || item.ids.some(id => card.activityIds.includes(id)))?.preview || null
+  return ACTIVITY_CLIENT_PREVIEWS.find(item => item.registration.title === card.title
+    || item.registration.ids.some(id => card.activityIds.includes(id)))?.preview || null
 })
 const selectedActivityDetails = computed(() => {
   const card = selectedActivityCard.value

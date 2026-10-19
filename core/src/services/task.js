@@ -11,6 +11,7 @@ const { isAutomationOn } = require('../models/store');
 const { sendMsgAsync, isConnected, networkEvents } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { toLong, toNum, log, logWarn, sleep } = require('../utils/utils');
+const { isTransientNetworkError } = require('../utils/network-errors');
 const { createScheduler } = require('./scheduler');
 const { recordOperation } = require('./stats');
 const { getItemById } = require('../config/gameConfig');
@@ -33,22 +34,6 @@ function getDateKey() {
 }
 
 // ---- 错误判断 ----
-
-/**
- * 判断是否为瞬时网络错误（可忽略不报警）
- */
-function isTransientError(err) {
-  const msg = String(err && err.message || '');
-  if (!msg) return false;
-  return [
-    '连接未打开',
-    '请求超时',
-    '请求已中断',
-    '连接关闭',
-    '发送失败',
-    '请求队列已满',
-  ].some((keyword) => msg.includes(keyword));
-}
 
 // ---- RPC 调用 ----
 
@@ -396,7 +381,7 @@ async function checkAndClaimTasks() {
     // 图鉴奖励
     await checkAndClaimIllustratedRewards();
   } catch (err) {
-    if (isTransientError(err)) return;
+    if (isTransientNetworkError(err)) return;
     logWarn('任务', `检查任务失败: ${err.message}`, {
       module: 'task', event: '扫描任务', result: 'error',
     });

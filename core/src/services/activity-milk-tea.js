@@ -1,5 +1,6 @@
 const catalog = require('../activity-data/milk-tea-20261015.json');
 const { serializeMutation, businessError, positiveDecimal } = require('./activity-center-helpers');
+const { sanitizeProtocolText } = require('../utils/protocol-text');
 function normalizeWireMaps(value) {
   if (Array.isArray(value)) return value.map(normalizeWireMaps);
   if (!value || typeof value !== 'object') return value;
@@ -138,7 +139,7 @@ function createMilkTeaService({ types, sendMsgAsync, getBag, getBagItems, getSer
           : [...list(candidates.friends), ...list(candidates.robots)].find(x => x.friend.gid === String(input.targetGid) && Number(x.state) === 0);
       if (!target && input.autoSelect === true) return { ok: true, skipped: true, reason: '没有符合策略的空闲员工' };
       if (!target || !available([{ id: '1041', count: candidates.wage_total }], inventory)) fail('没有可雇佣员工或奶茶券不足');
-      detail = { employeeName: String(target.friend.name || '').replace(/[\x00-\x1F\x7F]/g, '').slice(0, 60), slotIndex: slot, durationId: duration.duration_id, hours: duration.duration_sec / 3600, talentId: Number(target.talent_id), employeeType: target.is_robot ? '实习员工' : '好友', fallbackUsed: input.autoSelect === true && Number(input.talentId || 0) !== 0 && Number(target.talent_id) !== Number(input.talentId), wage: String(candidates.wage_total) };
+      detail = { employeeName: sanitizeProtocolText(target.friend.name, 60), slotIndex: slot, durationId: duration.duration_id, hours: duration.duration_sec / 3600, talentId: Number(target.talent_id), employeeType: target.is_robot ? '实习员工' : '好友', fallbackUsed: input.autoSelect === true && Number(input.talentId || 0) !== 0 && Number(target.talent_id) !== Number(input.talentId), wage: String(candidates.wage_total) };
       params = { hires: [{ slot_index: slot, duration_id: duration.duration_id, target_gid: target.friend.gid }] };
     }
     if (action === 'interact') {
