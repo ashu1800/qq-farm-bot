@@ -259,7 +259,7 @@ function createRuntimeEngine(options = {}) {
     /** 停止所有账号 */
     function stopAllAccounts() {
         for (const id of Object.keys(workers)) {
-            stopWorker(id);
+            stopWorker(id, { userInitiated: true });
         }
     }
 

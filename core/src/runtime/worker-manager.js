@@ -53,6 +53,17 @@ function createWorkerManager(deps) {
         getPetDiaryFriend: 30000,
     };
     const WATCHDOG_MAX_RESTARTS = 3;
+    // 普通离线时先等 Worker 自己的重连循环给出结论（重连成功即取消提醒，
+    // 重连失败会转成定时重登）。该兜底只覆盖“一直离线但没有任何失败事件”的卡死场景；
+    // 重登拿到 Code 后同样用这段时间等连接真正恢复。
+    // 注意：只有等待某个具体恢复动作时才启用；定时重登的排期本身不设期限，
+    // 以免重登间隔较长（默认 60 分钟）时提前误报。
+    const OFFLINE_NOTICE_FALLBACK_MS = (() => {
+        const value = Number(processRef.env && processRef.env.FARM_OFFLINE_NOTICE_GRACE_MS);
+        return Number.isFinite(value) && value >= 0 ? value : 3 * 60 * 1000;
+    })();
+    // 重登成功后额外等待连接恢复的时间
+    const OFFLINE_NOTICE_RELOGIN_SLACK_MS = 5 * 60 * 1000;
 
     /** 是否支持 Thread 模式（非 pkg 打包 + Worker 可用） */
     const threadMode = runtimeMode === 'thread' && !processRef.pkg && typeof WorkerThread === 'function';
@@ -85,20 +96,169 @@ function createWorkerManager(deps) {
         return String(value || '').trim();
     }
 
+    /**
+     * 下线提醒分两段：
+     * - 普通离线 / 被踢 / 重连失败 / 登录失效先挂起（pending），等待自动恢复结果；
+     * - 只有恢复失败（重登失败、兜底超时、自动重登不可用）才真正推送提醒。
+     * 这样短暂断网或一次成功的自动重登不会再发邮件。
+     */
+    const pendingOfflineNotices = new Map();
+
+    /** 立即推送（自动恢复已经明确失败或不可用），并清掉同一账号的挂起项 */
     function notifyAbnormalOffline(accountId, wrk, reason, action, message) {
         if (!wrk || wrk.offlineReminderTriggered) return false;
         wrk.offlineReminderTriggered = true;
-        const normalizedReason = cleanText(reason) || 'unknown';
+        wrk.offlineNoticePending = false;
 
+        const pending = pendingOfflineNotices.get(String(accountId));
+        if (pending) {
+            pendingOfflineNotices.delete(String(accountId));
+            clearOfflineNoticeTimer(pending);
+        }
+
+        const normalizedReason = cleanText(reason) || 'unknown';
         triggerOfflineReminder({
             accountId,
             accountName: wrk.name,
             username: wrk.username,
             reason: normalizedReason,
-            offlineMs: wrk.disconnectedSince ? Date.now() - wrk.disconnectedSince : 0
+            offlineMs: wrk.disconnectedSince
+                ? Date.now() - wrk.disconnectedSince
+                : (pending ? Date.now() - pending.since : 0)
         });
         if (action && message) {
             addAccountLog(action, message, accountId, wrk.name, { reason: normalizedReason });
+        }
+        return true;
+    }
+
+    function clearOfflineNoticeTimer(pending) {
+        if (!pending || !pending.timerTask) return;
+        scheduler.clear(pending.timerTask);
+        pending.timerTask = '';
+    }
+
+    function startOfflineNotice(accountId, wrk, reason, action, message) {
+        if (!wrk || wrk.offlineReminderTriggered || wrk.offlineNoticePending) return false;
+        const id = String(accountId || '');
+        if (!id || pendingOfflineNotices.has(id)) return false;
+
+        wrk.offlineNoticePending = true;
+        const pending = {
+            id,
+            accountId: id,
+            accountName: wrk.name || '',
+            username: wrk.username || '',
+            reason: cleanText(reason) || 'unknown',
+            action: action || '',
+            message: message || '',
+            since: Date.now(),
+            timerTask: '',
+            reloginAttempted: false,
+            reloginScheduled: false,
+            reloginWaiter: null,
+        };
+        // 交给 scheduleAutoRelogin：拿到新 Code 后仍要等真正连上，
+        // 只有重登失败或重启后仍未连接才推送提醒。
+        pending.reloginWaiter = (ok) => {
+            // 账号后来已重新连上（status_sync 已取消挂起项）时忽略迟到的结果
+            if (pendingOfflineNotices.get(id) !== pending) return;
+            resolvePendingRelogin(id, ok);
+        };
+
+        pendingOfflineNotices.set(id, pending);
+        armOfflineNoticeTimer(pending, OFFLINE_NOTICE_FALLBACK_MS, 'offline_timeout');
+        log('系统', `账号 ${wrk.name} 已离线，等待自动恢复结果后再决定是否发送下线提醒`, {
+            accountId: id, accountName: wrk.name, reason: pending.reason
+        });
+        return true;
+    }
+
+    /** 挂起提醒的兜底期限：到点仍未恢复才推送 */
+    function armOfflineNoticeTimer(pending, delayMs, reason) {
+        clearOfflineNoticeTimer(pending);
+        if (!pending || !(delayMs > 0)) return;
+        pending.timerTask = `offline_notice_timer_${pending.id}`;
+        scheduler.setTimeoutTask(pending.timerTask, delayMs, () => {
+            if (pendingOfflineNotices.get(pending.id) !== pending) return;
+            pending.timerTask = '';
+            pending.reason = reason || pending.reason;
+            settleOfflineNotice(pending);
+        });
+    }
+
+    /** 把自动重登挂到等待恢复的账号上；返回是否排期成功 */
+    function schedulePendingRelogin(accountId, reason) {
+        const pending = pendingOfflineNotices.get(String(accountId));
+        if (!pending || typeof scheduleAutoRelogin !== 'function') return false;
+        const scheduled = scheduleAutoRelogin(accountId, reason, pending.reloginWaiter);
+        if (!scheduled) return false;
+        pending.reloginScheduled = true;
+        // 排期成功后以重登结果为界；具体期限在 resolvePendingRelogin 里确定
+        clearOfflineNoticeTimer(pending);
+        return true;
+    }
+
+    /** 恢复动作已有结果时通知挂起项；没有挂起项时返回 false */
+    function resolvePendingRelogin(accountId, ok, overrides = {}) {
+        const pending = pendingOfflineNotices.get(String(accountId));
+        if (!pending) return false;
+        pending.reloginAttempted = true;
+        if (!ok) {
+            settleOfflineNotice(pending, overrides);
+            return true;
+        }
+        // 拿到新 Code 不等于已经连上：等连接恢复事件来取消，
+        // 超时仍离线才提醒（避免“重登成功但随后仍然掉线”被静默吞掉）。
+        pending.reloginSucceeded = true;
+        armOfflineNoticeTimer(pending, OFFLINE_NOTICE_FALLBACK_MS + OFFLINE_NOTICE_RELOGIN_SLACK_MS, 'relogin_no_connection');
+        return true;
+    }
+
+    function cancelOfflineNotice(accountId, reason = '') {
+        const key = String(accountId || '');
+        const pending = pendingOfflineNotices.get(key);
+        if (!pending) return false;
+        pendingOfflineNotices.delete(key);
+        clearOfflineNoticeTimer(pending);
+
+        const wrk = workers[key];
+        if (wrk) wrk.offlineNoticePending = false;
+        log('系统', `账号 ${pending.accountName || key} 已恢复连接，取消下线提醒`, {
+            accountId: key, accountName: pending.accountName, reason: reason || 'recovered'
+        });
+        return true;
+    }
+
+    /** 真正推送下线提醒；恢复已经明确失败或兜底期限已到 */
+    function settleOfflineNotice(pending, overrides = {}) {
+        if (!pending || pendingOfflineNotices.get(pending.id) !== pending) return false;
+        pendingOfflineNotices.delete(pending.id);
+        clearOfflineNoticeTimer(pending);
+
+        const wrk = workers[pending.id];
+        if (wrk && !wrk.stopping) wrk.offlineReminderTriggered = true;
+        if (wrk) wrk.offlineNoticePending = false;
+
+        const reason = cleanText(overrides.reason || pending.reason) || 'unknown';
+        const offlineMs = Math.max(0, Number(overrides.offlineMs) || (Date.now() - Number(pending.since || Date.now())));
+        const minutes = Math.floor(offlineMs / 60000);
+        const accountName = pending.accountName || (wrk && wrk.name) || '';
+        const username = pending.username || (wrk && wrk.username) || '';
+        const message = pending.message
+            || `账号 ${accountName || pending.id} 离线 ${minutes} 分钟后仍未恢复（原因: ${reason}），已发送下线提醒`;
+
+        triggerOfflineReminder({
+            accountId: pending.accountId,
+            accountName,
+            username,
+            reason,
+            offlineMs
+        });
+        if (pending.action) {
+            addAccountLog(pending.action, message, pending.accountId, accountName, {
+                reason, offlineMs, reloginAttempted: pending.reloginAttempted
+            });
         }
         return true;
     }
@@ -266,6 +426,7 @@ function createWorkerManager(deps) {
             stopping: false,
             disconnectedSince: 0,
             offlineReminderTriggered: false,
+            offlineNoticePending: false,
             autoDeleteTriggered: false,
             wsError: null,
             lastPongAt: Date.now()
@@ -311,8 +472,19 @@ function createWorkerManager(deps) {
 
             if (wrk && !wrk.stopping) {
                 const reason = `worker_exit:code=${code == null ? 'unknown' : code},signal=${signal || 'none'}`;
-                notifyAbnormalOffline(account.id, wrk, reason, 'worker_unexpected_exit',
-                    `账号 ${displayName} 异常掉线（Worker 进程意外退出）`);
+                // Worker 退出后自身不会再重连：还有凭据刷新/重登在途时继续等待结果，
+                // 否则已没有任何恢复途径，直接结算提醒。
+                const pending = pendingOfflineNotices.get(String(account.id));
+                if (pending) {
+                    pending.reason = reason;
+                    const recoveryInFlight = pending.reloginScheduled
+                        || pending.reloginSucceeded
+                        || credentialRefreshes.has(account.id);
+                    if (!recoveryInFlight) settleOfflineNotice(pending);
+                } else {
+                    notifyAbnormalOffline(account.id, wrk, reason, 'worker_unexpected_exit',
+                        `账号 ${displayName} 异常掉线（Worker 进程意外退出）`);
+                }
             }
 
             scheduler.clear(`force_kill_${  account.id}`);
@@ -338,13 +510,16 @@ function createWorkerManager(deps) {
 
     /**
      * 停止账号 Worker
+     * @param {string} accountId
+     * @param {{ userInitiated?: boolean }} [options] - 用户在面板手动停止时不再发送下线提醒
      */
-    function stopWorker(accountId) {
+    function stopWorker(accountId, options = {}) {
         const wrk = workers[accountId];
         if (!wrk) return;
 
         const targetProc = wrk.process;
         wrk.stopping = true;
+        if (options.userInitiated) cancelOfflineNotice(accountId, 'user_stop');
 
         // 发送停止指令
         wrk.process.send({ type: 'stop' });
@@ -399,7 +574,7 @@ function createWorkerManager(deps) {
             return doRestart();
         }
 
-        // 先尝试正常停止，再等待退出事件
+        // 先尝试正常停止，再等待退出事件。重启属于自动恢复，不能取消挂起中的下线提醒
         targetProc.once('exit', doRestart);
         stopWorker(accountId);
 
@@ -458,18 +633,16 @@ function createWorkerManager(deps) {
                 wrk.offlineReminderTriggered = false;
                 wrk.autoDeleteTriggered = false;
                 wrk.wsError = null;
+                cancelOfflineNotice(accountId, 'reconnected');
             } else if (!wrk.stopping) {
                 const now = Date.now();
                 if (!wrk.disconnectedSince) wrk.disconnectedSince = now;
 
                 const offlineDuration = now - wrk.disconnectedSince;
-                if (!wrk.offlineReminderTriggered && offlineDuration >= 60000) {
-                    const offlineMinutes = Math.floor(offlineDuration / 60000);
-                    log('系统', `账号 ${  wrk.name  } 已离线 ${  offlineMinutes  } 分钟，发送下线提醒`);
-
-                    notifyAbnormalOffline(accountId, wrk, 'offline', 'offline_reminder',
-                        `账号 ${  wrk.name  } 已离线 ${  offlineMinutes  } 分钟，已发送下线提醒`,
-                    );
+                // 先挂起提醒，等 Worker 的重连循环或自动重登给出结果
+                if (!wrk.offlineReminderTriggered && !wrk.offlineNoticePending
+                    && offlineDuration >= 60000) {
+                    startOfflineNotice(accountId, wrk, 'offline', 'offline_reminder', '');
                 }
 
                 const autoDeleteMs = typeof getOfflineAutoDeleteMs === 'function'
@@ -482,13 +655,19 @@ function createWorkerManager(deps) {
                         accountId: String(accountId),
                         accountName: wrk.name
                     });
-                    triggerOfflineReminder({
-                        accountId,
-                        accountName: wrk.name,
-                        username: wrk.username,
-                        reason: 'offline_timeout',
-                        offlineMs: offlineDuration
-                    });
+                    // 复用挂起中的下线提醒，避免同一账号发两封邮件
+                    const pendingDeleteNotice = pendingOfflineNotices.get(String(accountId));
+                    if (pendingDeleteNotice) {
+                        settleOfflineNotice(pendingDeleteNotice, { reason: 'offline_timeout', offlineMs: offlineDuration });
+                    } else {
+                        triggerOfflineReminder({
+                            accountId,
+                            accountName: wrk.name,
+                            username: wrk.username,
+                            reason: 'offline_timeout',
+                            offlineMs: offlineDuration
+                        });
+                    }
                     addAccountLog('offline_delete',
                         `账号 ${  wrk.name  } 持续离线 ${  offlineMinutes  } 分钟，已自动删除`,
                         accountId, wrk.name, { reason: 'offline_timeout', offlineMs: offlineDuration });
@@ -538,16 +717,18 @@ function createWorkerManager(deps) {
 
             // Code 400 = 登录失效
             if (code === 400) {
-                notifyAbnormalOffline(accountId, wrk, `ws_400:${message || '登录失效'}`,
-                    'offline_reminder', `账号 ${wrk.name} 登录失效，已发送下线提醒`);
+                startOfflineNotice(accountId, wrk, `ws_400:${message || '登录失效'}`,
+                    'offline_reminder', '');
                 addAccountLog('ws_400', `账号 ${  wrk.name  } 登录失效，请更新 Code`,
                     accountId, wrk.name);
                 if (typeof refreshAccountCode === 'function' && !credentialRefreshes.has(accountId)) {
                     const task = Promise.resolve(refreshAccountCode(accountId, 'ws_400'))
                         .then(ok => {
-                            if (!ok && typeof scheduleAutoRelogin === 'function') {
-                                scheduleAutoRelogin(accountId, 'ws_400_refresh_failed');
-                            }
+                            if (ok) return resolvePendingRelogin(accountId, true);
+                            // 立即刷新失败后仍会按间隔重登，继续等待那次结果；
+                            // 无法排期重登时（关闭/熔断）才在下一步立刻提醒
+                            if (schedulePendingRelogin(accountId, 'ws_400_refresh_failed')) return;
+                            resolvePendingRelogin(accountId, false, { reason: 'refresh_failed' });
                         })
                         .finally(() => credentialRefreshes.delete(accountId));
                     credentialRefreshes.set(accountId, task);
@@ -563,15 +744,16 @@ function createWorkerManager(deps) {
                 accountName: wrk.name
             });
 
-            notifyAbnormalOffline(accountId, wrk, `kickout:${reason}`);
+            startOfflineNotice(accountId, wrk, `kickout:${reason}`, 'kickout_stop', '');
             addAccountLog('kickout_stop',
                 `账号 ${  wrk.name  } 被踢下线，已自动停止`,
                 accountId, wrk.name, { reason });
 
             stopWorker(accountId);
-            if (typeof scheduleAutoRelogin === 'function') {
-                scheduleAutoRelogin(accountId, `kickout:${reason}`);
-            }
+            const scheduled = schedulePendingRelogin(accountId, `kickout:${reason}`)
+                || schedulePendingRelogin(accountId, 'kickout');
+            // 未启用自动重登时，停止 Worker 后没有任何恢复途径，需要立即提醒
+            if (!scheduled) resolvePendingRelogin(accountId, false, { reason: `kickout:${reason}` });
         } else if (msg.type === 'ws_reconnect_failed') {
             const reason = msg.reason || '未知';
             log('系统', `账号 ${  wrk.name  } 连接多次重试失败，已自动停止账号`, {
@@ -579,15 +761,16 @@ function createWorkerManager(deps) {
                 accountName: wrk.name
             });
 
-            notifyAbnormalOffline(accountId, wrk, `ws_reconnect_failed:${reason}`);
+            startOfflineNotice(accountId, wrk, `ws_reconnect_failed:${reason}`, 'ws_reconnect_failed', '');
             addAccountLog('ws_reconnect_failed',
                 `账号 ${  wrk.name  } 连接多次重试失败，已自动停止`,
                 accountId, wrk.name, { reason });
 
             stopWorker(accountId);
-            if (typeof scheduleAutoRelogin === 'function') {
-                scheduleAutoRelogin(accountId, `ws_reconnect_failed:${reason}`);
-            }
+            const scheduled = schedulePendingRelogin(accountId, `ws_reconnect_failed:${reason}`)
+                || schedulePendingRelogin(accountId, 'ws_reconnect_failed');
+            // 未启用自动重登时，停止 Worker 后没有任何恢复途径，需要立即提醒
+            if (!scheduled) resolvePendingRelogin(accountId, false, { reason: `ws_reconnect_failed:${reason}` });
         } else if (msg.type === 'client_version_update') {
             const clientVersion = cleanText(msg.clientVersion);
             if (clientVersion && typeof updateSystemClientVersion === 'function') {
@@ -695,9 +878,10 @@ function createWorkerManager(deps) {
                     .filter(at => now - at < 60 * 60 * 1000);
                 if (history.length >= WATCHDOG_MAX_RESTARTS) {
                     wrk.stopping = true;
+                    // 已是最后一次自动恢复（停止账号），不再等待后续重试
+                    stopWorker(accountId, { userInitiated: true });
                     notifyAbnormalOffline(accountId, wrk, 'worker_watchdog_stopped',
                         'offline_reminder', `账号 ${wrk.name} Worker 连续无响应，已发送下线提醒`);
-                    stopWorker(accountId);
                     log('错误', `账号 ${wrk.name} Worker 连续无响应，已停止自动重启`, {
                         accountId, accountName: wrk.name
                     });
