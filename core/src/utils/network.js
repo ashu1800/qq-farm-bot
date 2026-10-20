@@ -15,7 +15,7 @@ const { types } = require('./proto');
 const { toLong, toNum, syncServerTime, log, logWarn } = require('./utils');
 const cryptoWasm = require('./crypto-wasm');
 const { createGatewayToken } = require('./gateway-token');
-const { evaluateGatewayHealth, getOldestPendingAgeMs } = require('./gateway-health');
+const { evaluateGatewayHealth, getOldestPendingAgeMs, shouldTerminateForHeartbeat, MAX_HEARTBEAT_MISSES } = require('./gateway-health');
 const { createRequestGate, getRequestPriority } = require('./request-priority');
 const { TsdkRuntime } = require('./tsdk-runtime');
 
@@ -345,6 +345,8 @@ function handleMessage(data) {
         const msg = types.GateMessage.decode(buf);
         const meta = msg.meta;
         if (!meta) return;
+        // 入站活动时间：用于区分"连接已死"和"只是 Heartbeat 应答慢/排队超时"
+        lastInboundMessageAt = Date.now();
 
         if (meta.server_seq) {
             const seq = toNum(meta.server_seq);
@@ -701,9 +703,9 @@ async function sendLogin(onLoginSuccess, deviceProtocol) {
 
 // ============ 心跳 ============
 let lastHeartbeatResponse = Date.now();
+let lastInboundMessageAt = Date.now();
 let heartbeatMissCount = 0;
 const HEARTBEAT_TIMEOUT = 30000;
-const MAX_HEARTBEAT_MISS = 3;
 
 function getGatewayHealth() {
     const now = Date.now();
@@ -724,24 +726,31 @@ function getGatewayHealth() {
 function startHeartbeat() {
     networkScheduler.clear('heartbeat_interval');
     lastHeartbeatResponse = Date.now();
+    lastInboundMessageAt = Date.now();
     heartbeatMissCount = 0;
 
     networkScheduler.setIntervalTask('heartbeat_interval', CONFIG.heartbeatInterval, () => {
         if (!userState.gid) return;
 
-        const timeSinceLastResponse = Date.now() - lastHeartbeatResponse;
+        const now = Date.now();
+        const timeSinceLastResponse = now - lastHeartbeatResponse;
+        const inboundSilenceMs = Math.max(0, now - lastInboundMessageAt);
         if (timeSinceLastResponse > HEARTBEAT_TIMEOUT) {
             heartbeatMissCount++;
-            logWarn('心跳', `连接可能已断开 (${Math.round(timeSinceLastResponse/1000)}s 无响应, miss=${heartbeatMissCount}/${MAX_HEARTBEAT_MISS}, pending=${pendingCallbacks.size})`);
-            if (heartbeatMissCount >= MAX_HEARTBEAT_MISS) {
+            logWarn('心跳', `心跳未响应 (miss=${heartbeatMissCount}/${MAX_HEARTBEAT_MISSES}, `
+                + `heartbeat=${Math.round(timeSinceLastResponse / 1000)}s, inbound=${Math.round(inboundSilenceMs / 1000)}s, `
+                + `pending=${pendingCallbacks.size}, queued=${requestGate.snapshot().queued})`);
+            // 单一终止条件：连续心跳失败 AND 连接完全无入站数据（对齐官方心跳语义）。
+            // 只看心跳应答会误杀"业务流量正常、只是 Heartbeat 回得慢或排队超时"的健康连接，造成频繁掉线。
+            if (shouldTerminateForHeartbeat(heartbeatMissCount, inboundSilenceMs)) {
+                log('心跳', `${Math.round(inboundSilenceMs / 1000)}s 无入站数据，连续 ${heartbeatMissCount} 次心跳失败，账号将停止运行...`);
                 if (!ws || ws.readyState !== WebSocket.OPEN) {
                     log('心跳', '连接已关闭，立即重连...');
                 } else {
-                    log('心跳', '心跳超时，关闭连接并重连...');
                     try { ws.close(); } catch { }
                 }
                 networkEvents.emit('disconnect', { code: 'heartbeat_timeout' });
-                rejectAllPendingRequests('连接超时，已清理');
+                rejectAllPendingRequests('心跳超时，已清理');
                 reconnect(null);
                 return;
             }
