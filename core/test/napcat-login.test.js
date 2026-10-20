@@ -24,15 +24,19 @@ test('NapCat QR flow obtains code, keeps the QQ session, and pins auto login', a
   const calls = [];
   let pluginStatusChecks = 0;
   let scanned = false;
+  // 贴近真实 NapCat：每次 RefreshQRcode 都换一张新码。
+  let qrSeq = 0;
+  const qrUrl = () => `https://example.test/qr-${qrSeq || 1}`;
   globalThis.fetch = async (url, options) => {
     calls.push({ url: String(url), options });
     if (String(url).endsWith('/auth/login')) return json({ code: 0, data: { Credential: 'credential' } });
     if (String(url).endsWith('/status')) return json({ ok: true, ready: ++pluginStatusChecks > 1 });
-    if (String(url).endsWith('/QQLogin/GetQQLoginQrcode')) return json({ code: 0, data: { qrcode: 'https://example.test/qr' } });
+    if (String(url).endsWith('/QQLogin/RefreshQRcode')) { qrSeq += 1; return json({ code: 0, data: null }); }
+    if (String(url).endsWith('/QQLogin/GetQQLoginQrcode')) return json({ code: 0, data: { qrcode: qrUrl() } });
     if (String(url).endsWith('/QQLogin/GetQQLoginInfo')) return json({ code: 0, data: { uin: '12345', nickname: '测试昵称' } });
     if (String(url).endsWith('/QQLogin/CheckLoginStatus')) {
       // 扫码确认是外部事件，由测试显式翻转，不能由查询次数推导。
-      return json({ code: 0, status: 'success', data: { isLogin: scanned, isOffline: false, qrcodeurl: 'https://example.test/qr' } });
+      return json({ code: 0, status: 'success', data: { isLogin: scanned, isOffline: false, qrcodeurl: qrUrl() } });
     }
     if (String(url).endsWith('/QQLogin/RestartNapCat')) {
       scanned = false;
@@ -51,7 +55,8 @@ test('NapCat QR flow obtains code, keeps the QQ session, and pins auto login', a
   const service = require('../src/services/napcat-login');
   const task = await service.create('alice');
   assert.match(task.qrImage, /^data:image\/png;base64,/);
-  assert.equal(calls.some(call => call.url.endsWith('/QQLogin/RefreshQRcode')), false);
+  // 取码必须显式刷新一次，确保交给用户的不是 NapCat 缓存的旧码。
+  assert.ok(calls.some(call => call.url.endsWith('/QQLogin/RefreshQRcode')));
   await assert.rejects(() => service.status(task.taskId, 'bob'), /不存在或已过期/);
   assert.equal((await service.status(task.taskId, 'alice')).status, 'waiting_scan');
   scanned = true;
@@ -242,11 +247,13 @@ test('NapCat refresh fails fast when the account has no persisted quick-login se
 test('NapCat refresh is rejected while a QR scan task is in progress', async (t) => {
   Object.assign(process.env, refreshEnv);
   const originalFetch = globalThis.fetch;
+  let qrSeq = 0;
   globalThis.fetch = async (url) => {
     const pathname = new URL(String(url)).pathname;
     if (pathname.endsWith('/auth/login')) return refreshJson({ code: 0, data: { Credential: 'credential' } });
-    if (pathname.endsWith('/QQLogin/CheckLoginStatus')) return refreshJson({ code: 0, data: { isLogin: false, isOffline: false } });
-    if (pathname.endsWith('/QQLogin/GetQQLoginQrcode')) return refreshJson({ code: 0, data: { qrcode: 'https://example.test/qr' } });
+    if (pathname.endsWith('/QQLogin/CheckLoginStatus')) return refreshJson({ code: 0, data: { isLogin: false, isOffline: false, qrcodeurl: `https://example.test/qr-url-${qrSeq || 1}` } });
+    if (pathname.endsWith('/QQLogin/RefreshQRcode')) { qrSeq += 1; return refreshJson({ code: 0, data: null }); }
+    if (pathname.endsWith('/QQLogin/GetQQLoginQrcode')) return refreshJson({ code: 0, data: { qrcode: `https://example.test/qr-${qrSeq || 1}` } });
     return refreshJson({ code: 0 });
   };
   t.after(() => { globalThis.fetch = originalFetch; });
@@ -284,11 +291,10 @@ test('create(refresh:true) replaces an in-flight task instead of silently reusin
     const pathname = new URL(String(url)).pathname;
     calls.push(pathname);
     if (pathname.endsWith('/auth/login')) return json({ code: 0, data: { Credential: 'credential' } });
-    if (pathname.endsWith('/QQLogin/CheckLoginStatus')) return json({ code: 0, data: { isLogin: false, isOffline: false } });
-    if (pathname.endsWith('/QQLogin/RefreshQRcode')) return json({ code: 0, data: null });
+    if (pathname.endsWith('/QQLogin/CheckLoginStatus')) return json({ code: 0, data: { isLogin: false, isOffline: false, qrcodeurl: `https://example.test/status-qr-${qrSeq || 1}` } });
+    if (pathname.endsWith('/QQLogin/RefreshQRcode')) { qrSeq += 1; return json({ code: 0, data: null }); }
     if (pathname.endsWith('/QQLogin/GetQQLoginQrcode')) {
-      qrSeq += 1;
-      return json({ code: 0, data: { qrcode: `https://example.test/qr-${qrSeq}` } });
+      return json({ code: 0, data: { qrcode: `https://example.test/qr-${qrSeq || 1}` } });
     }
     return json({ code: 0 });
   };
@@ -378,7 +384,8 @@ test('create() waits for a stable QR before handing it to the user', async (t) =
   const originalFetch = globalThis.fetch;
   const calls = [];
   let statusChecks = 0;
-  // 冷启动：前 3 次状态查询拿不到 qrcodeurl，之后稳定给出同一张码。
+  let qrSeq = 0;
+  // 冷启动：前 3 次状态查询拿不到 qrcodeurl，之后给出可用的码。
   globalThis.fetch = async (url) => {
     const pathname = new URL(String(url)).pathname;
     calls.push(pathname);
@@ -386,9 +393,10 @@ test('create() waits for a stable QR before handing it to the user', async (t) =
     if (pathname.endsWith('/QQLogin/CheckLoginStatus')) {
       statusChecks += 1;
       if (statusChecks <= 3) return json({ code: 0, data: { isLogin: false, isOffline: false, qrcodeurl: '' } });
-      return json({ code: 0, data: { isLogin: false, isOffline: false, qrcodeurl: 'https://example.test/stable-qr' } });
+      return json({ code: 0, data: { isLogin: false, isOffline: false, qrcodeurl: `https://example.test/stable-qr-${qrSeq || 1}` } });
     }
-    if (pathname.endsWith('/QQLogin/GetQQLoginQrcode')) return json({ code: 0, data: { qrcode: 'https://example.test/stable-qr' } });
+    if (pathname.endsWith('/QQLogin/RefreshQRcode')) { qrSeq += 1; return json({ code: 0, data: null }); }
+    if (pathname.endsWith('/QQLogin/GetQQLoginQrcode')) return json({ code: 0, data: { qrcode: `https://example.test/stable-qr-${qrSeq || 1}` } });
     return json({ code: 0 });
   };
   t.after(() => { globalThis.fetch = originalFetch; });
@@ -413,22 +421,23 @@ test('create() reissues when NapCat reports the obtained QR as already expired',
   });
   const originalFetch = globalThis.fetch;
   const calls = [];
-  let statusChecks = 0;
   let qrSeq = 0;
+  let expired = false;
   globalThis.fetch = async (url) => {
     const pathname = new URL(String(url)).pathname;
     calls.push(pathname);
     if (pathname.endsWith('/auth/login')) return json({ code: 0, data: { Credential: 'credential' } });
     if (pathname.endsWith('/QQLogin/CheckLoginStatus')) {
-      statusChecks += 1;
-      // 取码后第一次状态查询报告码已失效，迫使服务端换码。
-      if (statusChecks === 4) return json({ code: 0, data: { isLogin: false, isOffline: false, qrcodeurl: '', loginError: '二维码已过期' } });
-      return json({ code: 0, data: { isLogin: false, isOffline: false, qrcodeurl: 'https://example.test/junk' } });
+      return json({ code: 0, data: {
+        isLogin: false,
+        isOffline: false,
+        qrcodeurl: `https://example.test/qr-url-${qrSeq || 1}`,
+        ...(expired ? { loginError: '二维码已过期' } : {}),
+      } });
     }
-    if (pathname.endsWith('/QQLogin/RefreshQRcode')) return json({ code: 0, data: null });
+    if (pathname.endsWith('/QQLogin/RefreshQRcode')) { qrSeq += 1; expired = false; return json({ code: 0, data: null }); }
     if (pathname.endsWith('/QQLogin/GetQQLoginQrcode')) {
-      qrSeq += 1;
-      return json({ code: 0, data: { qrcode: `https://example.test/qr-${qrSeq}` } });
+      return json({ code: 0, data: { qrcode: `https://example.test/qr-${qrSeq || 1}` } });
     }
     return json({ code: 0 });
   };
@@ -437,9 +446,14 @@ test('create() reissues when NapCat reports the obtained QR as already expired',
   delete require.cache[require.resolve('../src/services/napcat-login')];
   const service = require('../src/services/napcat-login');
   const task = await service.create('alice');
-  // 不能把死码交给用户：必须换过码，最终拿到的是第二张。
+  // 取码必然显式刷新，确保交给用户的不是 NapCat 缓存的旧码。
   assert.ok(calls.includes('/api/QQLogin/RefreshQRcode'));
-  assert.equal(qrSeq, 2);
+  const firstSeq = qrSeq;
+  // 用户拿起手机前 NapCat 报告码已失效：下一轮取码必须再刷新一次。
+  expired = true;
+  const next = await service.status(task.taskId, 'alice');
+  assert.equal(next.status, 'waiting_scan');
+  assert.ok(qrSeq > firstSeq, `expected another refresh, seq ${firstSeq} -> ${qrSeq}`);
   await service.cancel(task.taskId, 'alice');
 });
 

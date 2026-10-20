@@ -128,6 +128,8 @@ async function offlineHotSession() {
 // 必须等到 NapCat 真正能给出稳定二维码再取码，否则每次续扫都要重来一遍。
 const QR_READY_TIMEOUT_MS = Math.max(5000, Number(process.env.NAPCAT_QR_READY_TIMEOUT_MS) || 45000);
 const QR_READY_SETTLE_MS = Math.max(0, Number(process.env.NAPCAT_QR_READY_SETTLE_MS) || 300);
+// 前端 1.5 秒轮询一次 status；换码最小间隔用于避免会话冲突时反复重启 NapCat。
+const RENEW_MIN_INTERVAL_MS = Math.max(2000, Number(process.env.NAPCAT_RENEW_MIN_INTERVAL_MS) || 10000);
 
 function qrUrlOf(state) {
   return String(state?.qrcodeurl || state?.qrcodeUrl || state?.qrcode_url || '').trim();
@@ -138,6 +140,13 @@ function qrUrlOf(state) {
 // 若 NapCat 版本根本不返回 qrcodeurl，则降级为短暂等待后放行，不能把用户卡死。
 const QR_READY_FALLBACK_CHECKS = 5;
 
+// NapCat 只承载一个 QQ 会话。若它仍占着某个账号，新二维码会被 QQ 服务端立刻判废
+// （实测 loginError: 当前账号(...)已登录,无法重复登录）。必须显式识别这类冲突。
+function hasConflictSession(state) {
+  const text = String(state?.loginError || '');
+  return /已登录|重复登录|already\s*(?:logged|login)|logged\s*in/i.test(text);
+}
+
 async function waitQrReady() {
   const deadline = Date.now() + QR_READY_TIMEOUT_MS;
   let lastUrl = '';
@@ -147,6 +156,12 @@ async function waitQrReady() {
   while (Date.now() < deadline) {
     try {
       const state = await webUi('/QQLogin/CheckLoginStatus');
+      // 账号仍被占用时 NapCat 返回的是过期缓存码，不能当作就绪。
+      if (hasConflictSession(state)) {
+        lastError = state.loginError;
+        await sleep(REFRESH_POLL_MS);
+        continue;
+      }
       // 已有会话：不是给新账号扫码的场景，无需等待二维码就绪。
       if (hasQqSession(state)) return state;
       const url = qrUrlOf(state);
@@ -182,6 +197,7 @@ async function waitQrReady() {
 // 注意：qrcodeurl 为空只代表"还没生成码"，不能据此判定失效，否则换码流程会死等。
 function qrNeedsReissue(state) {
   if (!state || typeof state !== 'object') return false;
+  if (hasConflictSession(state)) return true;
   const text = `${state.status || ''} ${state.message || ''} ${state.loginError || ''}`.toLowerCase();
   return /expired|expire|timeout|invalid|过期|失效|超时/.test(text);
 }
@@ -189,7 +205,9 @@ function qrNeedsReissue(state) {
 async function clearStaleSession() {
   try {
     const state = await webUi('/QQLogin/CheckLoginStatus');
-    if (state?.isLogin === true) {
+    // 账号被占用的表现可能是 isLogin=false 但 loginError 明确说已登录，
+    // 只判断 isLogin 会漏掉这种冲突，随后取到的码必然被判废。
+    if (state?.isLogin === true || hasConflictSession(state)) {
       await offlineHotSession();
     }
     // isOffline=true 表示已在登录界面且会话票据保留，直接取码即可
@@ -271,6 +289,41 @@ async function mintFarmCode(fallbackUin = '') {
   };
 }
 
+// 取一张确定是新的二维码。
+// NapCat 在账号被占用或内核未就绪时会反复返回同一张陈旧码，用户扫上去一律提示失效。
+// 因此显式 RefreshQRcode，并要求刷新前后的 qrcodeurl 不同；不变则继续重试。
+async function fetchFreshQr({ keepExisting = false, attempts = 3 } = {}) {
+  const readRaw = (result) => result.qrcode || result.qrCode || result.qrUrl || result.qr_url || result.image || result.base64;
+  if (keepExisting) {
+    // 已有 QQ 会话时不存在“陈旧二维码”问题，直接取当前码。
+    const result = await webUi('/QQLogin/GetQQLoginQrcode');
+    if (!readRaw(result)) throw new Error('NapCat 未返回登录二维码');
+    return result;
+  }
+  let before = qrUrlOf(await webUi('/QQLogin/CheckLoginStatus').catch(() => null));
+  let lastResult = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    await webUi('/QQLogin/RefreshQRcode');
+    await sleep(300);
+    lastResult = await webUi('/QQLogin/GetQQLoginQrcode');
+    if (!readRaw(lastResult)) throw new Error('NapCat 未返回登录二维码');
+    const after = qrUrlOf(await webUi('/QQLogin/CheckLoginStatus').catch(() => null));
+    // 拿不到 qrcodeurl（该版本不提供）时无法比较，直接接受取到的码。
+    if (!before || !after) return lastResult;
+    if (after !== before) return lastResult;
+    // 码没变：说明 NapCat 仍在复用旧码，记录并重试。
+    before = after;
+    await sleep(REFRESH_POLL_MS);
+  }
+  // 多次刷新仍拿到同一张码：交给调用方判定，不在此处静默成功。
+  const reason = 'NapCat 持续返回同一张二维码，可能仍处于旧会话中';
+  if (lastResult) {
+    lastResult.qrStale = true;
+    lastResult.qrStaleReason = reason;
+  }
+  return lastResult;
+}
+
 async function create(owner, { refresh = false } = {}) {
   if (!isConfigured()) throw new Error('NapCat 扫码登录未配置');
   const current = tasks.get(activeTaskId);
@@ -292,31 +345,23 @@ async function create(owner, { refresh = false } = {}) {
     await clearStaleSession();
     // 关键：QQ 内核冷启动期间拿到的码不可扫，必须等 NapCat 稳定后再取。
     // 第二个、第三个账号连着扫时 NapCat 刚被 RestartNapCat 重启过，正是这个窗口。
-    await waitQrReady();
-    if (refresh) {
-      await webUi('/QQLogin/RefreshQRcode');
-      await sleep(300);
+    const readyState = await waitQrReady();
+    // 已有 QQ 会话时 NapCat 不给新码，直接取当前码；否则必须刷新出一张新码。
+    let result = await fetchFreshQr({ keepExisting: hasQqSession(readyState) });
+    if (result.qrStale) {
+      // 刷新多次仍是同一张码，通常是旧会话没让出来：清掉会话后重取一次。
+      await offlineHotSession();
       await waitQrReady();
+      result = await fetchFreshQr();
+      if (result.qrStale) throw new Error(result.qrStaleReason || 'NapCat 未能生成新的登录二维码');
     }
-    let result;
-    try {
-      result = await webUi('/QQLogin/GetQQLoginQrcode');
-      // 取到码后再看一次状态：NapCat 若已判定这张码失效，换一张再交给用户。
-      const state = await webUi('/QQLogin/CheckLoginStatus').catch(() => null);
-      if (state && qrNeedsReissue(state)) {
-        await webUi('/QQLogin/RefreshQRcode');
-        await sleep(300);
-        await waitQrReady();
-        result = await webUi('/QQLogin/GetQQLoginQrcode');
-      }
-    } catch (error) {
-      if (/QQ Is Logined/i.test(error.message)) {
-        await offlineHotSession();
-      } else if (refresh) throw error;
-      await webUi('/QQLogin/RefreshQRcode');
-      await sleep(300);
+    // 取到码后再看一次状态：NapCat 若已判定这张码失效或存在账号占用，换一张再交给用户。
+    const state = await webUi('/QQLogin/CheckLoginStatus').catch(() => null);
+    if (state && hasConflictSession(state)) {
+      await offlineHotSession();
       await waitQrReady();
-      result = await webUi('/QQLogin/GetQQLoginQrcode');
+      result = await fetchFreshQr();
+      if (result.qrStale) throw new Error(result.qrStaleReason || 'NapCat 未能生成新的登录二维码');
     }
     const raw = result.qrcode || result.qrCode || result.qrUrl || result.qr_url || result.image || result.base64;
     if (!raw) throw new Error('NapCat 未返回登录二维码');
@@ -345,22 +390,31 @@ async function status(id, owner) {
       }
     } catch {}
   } else if (/scanned|待确认|等待确认/.test(text)) task.status = 'scanned';
-  else if (/expired|timeout|过期|失效/.test(text) || qrNeedsReissue(state)) {
+  else if (qrNeedsReissue(state)) {
     // QQ 服务端判码失效时直接原地换一张，而不是把“已过期”丢给用户重来。
-    // 第三个账号连着扫时旧码往往在用户拿起手机前就失效了。
-    await reissueQr(task);
+    // 换码失败不应让轮询整体失败：保留当前任务，下次轮询再试。
+    await reissueQr(task).catch(error => { task.error = error.message; });
   }
   return taskPublic(task);
 }
 
 // 同一任务内换码：保持 taskId 不变，前端轮询无需重建任务。
+// 前端 1.5 秒轮询一次，必须节流，否则一次会话冲突会触发重启风暴。
 async function reissueQr(task) {
-  await withSessionLock(async () => {
+  const now = Date.now();
+  if (task.reissuePromise) return task.reissuePromise;
+  if (task.lastReissueAt && now - task.lastReissueAt < RENEW_MIN_INTERVAL_MS) return;
+  task.lastReissueAt = now;
+  task.reissuePromise = withSessionLock(async () => {
     await waitQrReady();
-    await webUi('/QQLogin/RefreshQRcode');
-    await sleep(300);
-    await waitQrReady();
-    const result = await webUi('/QQLogin/GetQQLoginQrcode');
+    const result = await fetchFreshQr();
+    if (result.qrStale) {
+      await offlineHotSession();
+      await waitQrReady();
+      const retry = await fetchFreshQr();
+      if (retry.qrStale) throw new Error(retry.qrStaleReason || 'NapCat 未能生成新的登录二维码');
+      Object.assign(result, retry);
+    }
     const raw = result.qrcode || result.qrCode || result.qrUrl || result.qr_url || result.image || result.base64;
     if (!raw) throw new Error('NapCat 未返回登录二维码');
     task.qrImage = /^data:image\//i.test(raw) ? raw : (/^[a-z0-9+/]+={0,2}$/i.test(raw) && raw.length > 128 ? `data:image/png;base64,${raw}` : await QRCode.toDataURL(raw, { width: 280, margin: 1 }));
@@ -369,7 +423,8 @@ async function reissueQr(task) {
     if (task.timer) clearTimeout(task.timer);
     task.timer = setTimeout(() => { void release(task).catch(() => {}); }, TTL_MS + 10);
     task.timer.unref?.();
-  });
+  }).finally(() => { task.reissuePromise = null; });
+  return task.reissuePromise;
 }
 
 async function code(id, owner) {
