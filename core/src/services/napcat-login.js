@@ -123,6 +123,69 @@ async function offlineHotSession() {
   throw new Error('NapCat 重启后仍未回到登录界面');
 }
 
+// QQ 内核冷启动期间 CheckLoginStatus 会先返回 isLogin/isOffline 都为 false，
+// 此时 GetQQLoginQrcode 拿到的是半初始化上下文里的码，扫上去一律提示已失效。
+// 必须等到 NapCat 真正能给出稳定二维码再取码，否则每次续扫都要重来一遍。
+const QR_READY_TIMEOUT_MS = Math.max(5000, Number(process.env.NAPCAT_QR_READY_TIMEOUT_MS) || 45000);
+const QR_READY_SETTLE_MS = Math.max(0, Number(process.env.NAPCAT_QR_READY_SETTLE_MS) || 300);
+
+function qrUrlOf(state) {
+  return String(state?.qrcodeurl || state?.qrcodeUrl || state?.qrcode_url || '').trim();
+}
+
+// 只有 NapCat 已经准备好二维码（或本地已有 QQ 会话）时才允许取码。
+// 连续两次拿到同一个非空 qrcodeurl 才认为服务稳定，避免刚重启时拿到瞬时值。
+// 若 NapCat 版本根本不返回 qrcodeurl，则降级为短暂等待后放行，不能把用户卡死。
+const QR_READY_FALLBACK_CHECKS = 5;
+
+async function waitQrReady() {
+  const deadline = Date.now() + QR_READY_TIMEOUT_MS;
+  let lastUrl = '';
+  let lastChangeAt = 0;
+  let lastError = '';
+  let emptyChecks = 0;
+  while (Date.now() < deadline) {
+    try {
+      const state = await webUi('/QQLogin/CheckLoginStatus');
+      // 已有会话：不是给新账号扫码的场景，无需等待二维码就绪。
+      if (hasQqSession(state)) return state;
+      const url = qrUrlOf(state);
+      if (url) {
+        const now = Date.now();
+        if (url === lastUrl && now - lastChangeAt >= QR_READY_SETTLE_MS) {
+          await sleep(QR_READY_SETTLE_MS);
+          return state;
+        }
+        if (url !== lastUrl) {
+          lastUrl = url;
+          lastChangeAt = now;
+        }
+        emptyChecks = 0;
+      } else {
+        emptyChecks += 1;
+        // 该 NapCat 版本不提供 qrcodeurl：短暂等待后按旧行为放行。
+        if (emptyChecks >= QR_READY_FALLBACK_CHECKS) {
+          await sleep(QR_READY_SETTLE_MS);
+          return state;
+        }
+      }
+    } catch (error) {
+      // NapCat 正在重启时 WebUI 可能短暂不可用，继续重试而不是直接失败。
+      lastError = error.message || '';
+    }
+    await sleep(REFRESH_POLL_MS);
+  }
+  throw new Error(`NapCat 未能在 ${Math.round(QR_READY_TIMEOUT_MS / 1000)} 秒内提供可扫码的二维码${lastError ? `: ${lastError}` : ''}，请稍后重试`);
+}
+
+// 二维码被 QQ 服务端判失效时 NapCat 会在状态里带上 expired/超时类文案。
+// 注意：qrcodeurl 为空只代表"还没生成码"，不能据此判定失效，否则换码流程会死等。
+function qrNeedsReissue(state) {
+  if (!state || typeof state !== 'object') return false;
+  const text = `${state.status || ''} ${state.message || ''} ${state.loginError || ''}`.toLowerCase();
+  return /expired|expire|timeout|invalid|过期|失效|超时/.test(text);
+}
+
 async function clearStaleSession() {
   try {
     const state = await webUi('/QQLogin/CheckLoginStatus');
@@ -142,7 +205,9 @@ async function resetNapcat() {
     await new Promise(resolve => setTimeout(resolve, i ? 250 : 1000));
     try {
       const state = await webUi('/QQLogin/CheckLoginStatus');
-      if (!hasQqSession(state)) return;
+      // 仅有 isLogin/isOffline 都为 false 并不代表就绪：QQ 内核刚被杀掉时也是这个状态。
+      // 必须等到 NapCat 重新给出二维码（或已有会话）才算重启完成，否则下一个账号会拿到死码。
+      if (hasQqSession(state) || qrUrlOf(state)) return;
     } catch {}
   }
   throw new Error('NapCat 重启后仍未确认退出登录');
@@ -150,9 +215,13 @@ async function resetNapcat() {
 
 async function release(task, cleanup = '') {
   if (task.timer) clearTimeout(task.timer);
-  if (cleanup === 'restart') await resetNapcat();
-  tasks.delete(task.id);
-  if (activeTaskId === task.id) activeTaskId = '';
+  try {
+    if (cleanup === 'restart') await resetNapcat();
+  } finally {
+    // 清理失败也必须释放任务，否则前端会一直拿着一个已经无效的 taskId 轮询。
+    tasks.delete(task.id);
+    if (activeTaskId === task.id) activeTaskId = '';
+  }
 }
 
 async function currentLoginProfile() {
@@ -221,19 +290,32 @@ async function create(owner, { refresh = false } = {}) {
   let qrImage = '';
   await withSessionLock(async () => {
     await clearStaleSession();
+    // 关键：QQ 内核冷启动期间拿到的码不可扫，必须等 NapCat 稳定后再取。
+    // 第二个、第三个账号连着扫时 NapCat 刚被 RestartNapCat 重启过，正是这个窗口。
+    await waitQrReady();
     if (refresh) {
       await webUi('/QQLogin/RefreshQRcode');
       await sleep(300);
+      await waitQrReady();
     }
     let result;
     try {
       result = await webUi('/QQLogin/GetQQLoginQrcode');
+      // 取到码后再看一次状态：NapCat 若已判定这张码失效，换一张再交给用户。
+      const state = await webUi('/QQLogin/CheckLoginStatus').catch(() => null);
+      if (state && qrNeedsReissue(state)) {
+        await webUi('/QQLogin/RefreshQRcode');
+        await sleep(300);
+        await waitQrReady();
+        result = await webUi('/QQLogin/GetQQLoginQrcode');
+      }
     } catch (error) {
       if (/QQ Is Logined/i.test(error.message)) {
         await offlineHotSession();
       } else if (refresh) throw error;
       await webUi('/QQLogin/RefreshQRcode');
       await sleep(300);
+      await waitQrReady();
       result = await webUi('/QQLogin/GetQQLoginQrcode');
     }
     const raw = result.qrcode || result.qrCode || result.qrUrl || result.qr_url || result.image || result.base64;
@@ -263,8 +345,31 @@ async function status(id, owner) {
       }
     } catch {}
   } else if (/scanned|待确认|等待确认/.test(text)) task.status = 'scanned';
-  else if (/expired|timeout|过期|失效/.test(text)) task.status = 'expired';
+  else if (/expired|timeout|过期|失效/.test(text) || qrNeedsReissue(state)) {
+    // QQ 服务端判码失效时直接原地换一张，而不是把“已过期”丢给用户重来。
+    // 第三个账号连着扫时旧码往往在用户拿起手机前就失效了。
+    await reissueQr(task);
+  }
   return taskPublic(task);
+}
+
+// 同一任务内换码：保持 taskId 不变，前端轮询无需重建任务。
+async function reissueQr(task) {
+  await withSessionLock(async () => {
+    await waitQrReady();
+    await webUi('/QQLogin/RefreshQRcode');
+    await sleep(300);
+    await waitQrReady();
+    const result = await webUi('/QQLogin/GetQQLoginQrcode');
+    const raw = result.qrcode || result.qrCode || result.qrUrl || result.qr_url || result.image || result.base64;
+    if (!raw) throw new Error('NapCat 未返回登录二维码');
+    task.qrImage = /^data:image\//i.test(raw) ? raw : (/^[a-z0-9+/]+={0,2}$/i.test(raw) && raw.length > 128 ? `data:image/png;base64,${raw}` : await QRCode.toDataURL(raw, { width: 280, margin: 1 }));
+    task.status = 'waiting_scan';
+    task.expiresAt = Date.now() + TTL_MS;
+    if (task.timer) clearTimeout(task.timer);
+    task.timer = setTimeout(() => { void release(task).catch(() => {}); }, TTL_MS + 10);
+    task.timer.unref?.();
+  });
 }
 
 async function code(id, owner) {

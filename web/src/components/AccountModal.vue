@@ -201,6 +201,11 @@ const { pause: stopQqCheck, resume: startQqCheck } = useIntervalFn(async () => {
     const { data } = await api.post(`/api/napcat-login/tasks/${qqTaskId.value}/status`, undefined, { timeout: 20000, skipErrorToast: true } as any)
     if (!data?.ok)
       throw new Error(data?.error || '查询扫码状态失败')
+    // 后端会在二维码被 QQ 判失效时原地换码；这里同步新图，避免继续显示旧码。
+    if (data.data.qrImage && data.data.qrImage !== qqQrImage.value) {
+      qqQrImage.value = data.data.qrImage
+      qqQrCreatedAt.value = Date.now()
+    }
     qqStatus.value = data.data.status === 'scanned' ? '已扫码，请在 QQ 中确认' : '请使用 QQ 扫码登录'
     if (data.data.status === 'confirmed') {
       stopQqCheck()
