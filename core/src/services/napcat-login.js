@@ -211,7 +211,10 @@ async function create(owner, { refresh = false } = {}) {
     if (current.owner !== owner) throw new Error('已有 QQ 扫码任务正在进行，请稍后再试');
     if (current.status === 'cleaning') throw new Error('上一账号正在清理 QQ 会话，请稍候');
     if (current.status === 'cleanup_failed') await release(current, 'restart');
-    else return taskPublic(current);
+    else if (refresh) {
+      // 主动刷新必须换一张新码：复用旧任务会让用户扫到已经确认过的二维码。
+      await release(current).catch(() => {});
+    } else return taskPublic(current);
   } else if (current) {
     await release(current).catch(() => {});
   }
@@ -292,8 +295,9 @@ async function cancel(id, owner) {
   const task = tasks.get(String(id || ''));
   if (!task) return;
   if (task.owner !== owner) throw new Error('无权取消此登录任务');
-  // confirmed/scanned 阶段都可能已有 QQ 会话，非必要时不做破坏性清理。
-  await release(task, task.status === 'scanned' ? 'restart' : '');
+  // done 任务的 QQ 会话仍然是热的：不让出来，下一个账号就得先经历
+  // RestartNapCat + 被踢下线的窗口，期间扫到的码一律提示已失效。
+  await release(task, task.status === 'done' ? 'restart' : task.status === 'scanned' ? 'restart' : '');
 }
 
 // Code 失效后的静默续登：利用 NapCat 中保留的 QQ 会话快速登录并重新铸取 Code，无需重新扫码。

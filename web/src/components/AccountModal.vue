@@ -215,7 +215,12 @@ const { pause: stopQqCheck, resume: startQqCheck } = useIntervalFn(async () => {
   }
   catch (e: any) {
     stopQqCheck()
-    qqError.value = e.response?.data?.error || e.message || 'QQ 扫码登录失败'
+    // 后端在任务被 replace/释放后返回的是「登录任务不存在或已过期」，
+    // 直接透出会让用户以为二维码本身过期了，实际上换个任务就好。
+    const raw = e.response?.data?.error || e.message || ''
+    qqError.value = /不存在或已过期/.test(raw)
+      ? '登录任务已结束，请点击二维码重新获取'
+      : (raw || 'QQ 扫码登录失败')
   }
   finally { qqLoading.value = false }
 }, 1500, { immediate: false })

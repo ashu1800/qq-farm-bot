@@ -257,3 +257,105 @@ test('NapCat refresh is rejected while a QR scan task is in progress', async (t)
   await assert.rejects(() => service.refreshCodeForUin('12345'), /扫码任务正在进行/);
   await service.cancel(task.taskId, 'alice');
 });
+
+// 复现用户反馈：第一次扫码成功后，再点刷新拿第二个账号的二维码，
+// 前端会立刻收到「登录任务已过期」。
+//
+// 根因一：create() 在已有未过期任务时无条件复用它，忽略 refresh 参数。
+//   前端点二维码图片刷新时先 cancel 当前任务再 create(refresh:true)，
+//   但 cancel 之后 activeTaskId 已被清空，于是走正常分支——这条路是通的；
+//   真正失效的是 auto-refresh 那条路：任务还在，refresh 被静默丢弃，
+//   用户以为换了新码，扫的其实还是那张已经确认过的旧码。
+// 根因二：cancel() 对 done 状态的任务只从 map 删除、不重启 NapCat，
+//   而 done 任务的 QQ 会话仍热着；下一次 create() 走 clearStaleSession，
+//   需要 RestartNapCat + 轮询等待，期间会被踢下线并产生一段不可扫码的窗口。
+test('create(refresh:true) replaces an in-flight task instead of silently reusing it', async (t) => {
+  Object.assign(process.env, {
+    NAPCAT_LOGIN_ENABLED: 'true',
+    NAPCAT_TOKEN: 'napcat-test-token',
+    NAPCAT_WEBUI_URL: 'http://napcat-refresh-reuse.test/api',
+    NAPCAT_OPENAUTH_URL: 'http://napcat-refresh-reuse.test/plugin',
+    NAPCAT_REFRESH_POLL_MS: '10',
+  });
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  let qrSeq = 0;
+  globalThis.fetch = async (url) => {
+    const pathname = new URL(String(url)).pathname;
+    calls.push(pathname);
+    if (pathname.endsWith('/auth/login')) return json({ code: 0, data: { Credential: 'credential' } });
+    if (pathname.endsWith('/QQLogin/CheckLoginStatus')) return json({ code: 0, data: { isLogin: false, isOffline: false } });
+    if (pathname.endsWith('/QQLogin/RefreshQRcode')) return json({ code: 0, data: null });
+    if (pathname.endsWith('/QQLogin/GetQQLoginQrcode')) {
+      qrSeq += 1;
+      return json({ code: 0, data: { qrcode: `https://example.test/qr-${qrSeq}` } });
+    }
+    return json({ code: 0 });
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  delete require.cache[require.resolve('../src/services/napcat-login')];
+  const service = require('../src/services/napcat-login');
+  const first = await service.create('alice');
+
+  const refreshed = await service.create('alice', { refresh: true });
+  // 必须拿到新任务、新二维码；复用旧任务会让用户扫到已确认过的码。
+  assert.notEqual(refreshed.taskId, first.taskId);
+  assert.notEqual(refreshed.qrImage, first.qrImage);
+  assert.ok(calls.includes('/api/QQLogin/RefreshQRcode'));
+  // 旧任务应立刻失效，避免前端拿旧 id 继续轮询。
+  await assert.rejects(() => service.status(first.taskId, 'alice'), /不存在或已过期/);
+  assert.equal((await service.status(refreshed.taskId, 'alice')).status, 'waiting_scan');
+  await service.cancel(refreshed.taskId, 'alice');
+});
+
+// 关掉已扫码成功的任务后，下一次取码必须能直接扫码，
+// 不能因为上一个账号还热着而返回一段「不可扫」的窗口期。
+test('cancel of a finished task releases the hot QQ session for the next scan', async (t) => {
+  Object.assign(process.env, {
+    NAPCAT_LOGIN_ENABLED: 'true',
+    NAPCAT_TOKEN: 'napcat-test-token',
+    NAPCAT_WEBUI_URL: 'http://napcat-finished.test/api',
+    NAPCAT_OPENAUTH_URL: 'http://napcat-finished.test/plugin',
+    NAPCAT_REFRESH_POLL_MS: '10',
+  });
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  let hot = false;
+  let statusCalls = 0;
+  globalThis.fetch = async (url) => {
+    const pathname = new URL(String(url)).pathname;
+    calls.push(pathname);
+    if (pathname.endsWith('/auth/login')) return json({ code: 0, data: { Credential: 'credential' } });
+    if (pathname.endsWith('/QQLogin/CheckLoginStatus')) {
+      statusCalls += 1;
+      // create() 里的 clearStaleSession 也会查一次；之后视为用户已在手机上确认。
+      if (statusCalls > 1) hot = true;
+      return json({ code: 0, data: { isLogin: hot, isOffline: false } });
+    }
+    if (pathname.endsWith('/QQLogin/GetQQLoginInfo')) return json({ code: 0, data: { uin: '12345', nickname: '一号' } });
+    if (pathname.endsWith('/QQLogin/GetQQLoginQrcode')) return json({ code: 0, data: { qrcode: 'https://example.test/qr' } });
+    if (pathname.endsWith('/QQLogin/RestartNapCat')) { hot = false; statusCalls = 0; return json({ code: 0 }); }
+    if (pathname.endsWith('/status')) return json({ ok: true, ready: true });
+    if (pathname.endsWith('/miniapp')) { hot = true; return json({ ok: true, operation: 'loginWithAppId', code: 'code-1', uin: '12345', nickname: '一号' }); }
+    return json({ code: 0 });
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  delete require.cache[require.resolve('../src/services/napcat-login')];
+  const service = require('../src/services/napcat-login');
+  const task = await service.create('alice');
+  // 轮询到 NapCat 报告 isLogin 为止（前几次仍可能是未登录）。
+  let state = '';
+  for (let index = 0; index < 3 && state !== 'confirmed'; index += 1) {
+    state = (await service.status(task.taskId, 'alice')).status;
+  }
+  assert.equal(state, 'confirmed');
+  await service.code(task.taskId, 'alice');
+  assert.equal(hot, true);
+
+  // 用户关掉弹窗/换账号：done 任务的 QQ 会话必须被让出来。
+  await service.cancel(task.taskId, 'alice');
+  assert.equal(hot, false);
+  assert.ok(calls.some(pathname => pathname.endsWith('/QQLogin/RestartNapCat')));
+});
