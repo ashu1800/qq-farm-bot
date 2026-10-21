@@ -59,7 +59,8 @@ let clientSeq = 1;
 let serverSeq = 0;
 const pendingCallbacks = new Map();
 const pendingStartedAt = new Map();
-const requestGate = createRequestGate({ maxActive: 8, maxQueued: 100 });
+// 请求节流：并发限制为 2 条在途 + 出队 250ms 基线间隔 + 0~150ms 随机抖动（见 request-priority）
+const requestGate = createRequestGate({ maxActive: 2, maxQueued: 500 });
 let wsErrorState = { code: 0, at: 0, message: '' };
 const networkScheduler = createScheduler('network');
 let tsdkRuntime = null;
@@ -180,6 +181,8 @@ function stopSecurityRuntime(reason = '停止') {
 }
 
 function rejectAllPendingRequests(reason = '请求被中断') {
+    // 丢弃尚未出队的请求：连接已断，旧队列不能继续按节流节奏占用重连后的发送窗口
+    requestGate.flush(reason);
     const entries = Array.from(pendingCallbacks.entries());
     pendingCallbacks.clear();
     pendingStartedAt.clear();
@@ -286,6 +289,10 @@ async function sendMsg(serviceName, methodName, bodyBytes, callback) {
 
 /** Promise 版发送 */
 async function sendMsgAsync(serviceName, methodName, bodyBytes, timeout = 20000, options = {}) {
+    // 连接未就绪时不占用调度槽位，避免断线期间的请求把队列塞满
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        throw new Error(`连接未打开: ${methodName}`);
+    }
     const priority = getRequestPriority(options.priority);
     const release = await requestGate.acquire(priority);
     try {
